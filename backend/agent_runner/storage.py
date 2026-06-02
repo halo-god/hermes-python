@@ -1,0 +1,91 @@
+"""Workspace file persistence for produced artifacts.
+
+Two backends (STORAGE_BACKEND):
+  - db    : content stored inline in Postgres (default; zero extra infra)
+  - minio : content offloaded to MinIO/S3, only a storage_key kept in PG
+
+Either way the API serves content via read_content().
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+
+from sqlalchemy import select
+
+from app.config import settings
+from app.core import object_storage
+from app.db.base import async_session_maker
+from app.db.models.workspace import WorkspaceFile
+
+_KIND_BY_EXT = {
+    ".md": "md", ".markdown": "md", ".docx": "docx", ".doc": "docx",
+    ".csv": "csv", ".tsv": "csv", ".json": "json", ".txt": "txt",
+}
+_CONTENT_TYPE = {
+    "md": "text/markdown", "csv": "text/csv", "json": "application/json",
+    "txt": "text/plain", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def _kind_of(name: str) -> str:
+    _, ext = os.path.splitext(name.lower())
+    return _KIND_BY_EXT.get(ext, "txt")
+
+
+async def save_file(
+    conversation_id: uuid.UUID, path: str, content: str, agent_id: str | None
+) -> WorkspaceFile:
+    name = os.path.basename(path) or "untitled.txt"
+    kind = _kind_of(name)
+    data = content.encode("utf-8")
+    size = len(data)
+
+    storage_key: str | None = None
+    inline: str | None = content
+    if settings.storage_backend == "minio":
+        storage_key = f"{conversation_id}/{name}"
+        await asyncio.to_thread(
+            object_storage.put, storage_key, data, _CONTENT_TYPE.get(kind, "text/plain")
+        )
+        inline = None  # offloaded
+
+    async with async_session_maker() as db:
+        res = await db.execute(
+            select(WorkspaceFile).where(
+                WorkspaceFile.conversation_id == conversation_id,
+                WorkspaceFile.name == name,
+            )
+        )
+        f = res.scalar_one_or_none()
+        if f is None:
+            f = WorkspaceFile(
+                conversation_id=conversation_id,
+                name=name,
+                kind=kind,
+                content=inline,
+                storage_key=storage_key,
+                size_bytes=size,
+                created_by_agent=agent_id,
+                current_version=1,
+            )
+            db.add(f)
+        else:
+            f.content = inline
+            f.storage_key = storage_key
+            f.size_bytes = size
+            f.current_version += 1
+        await db.commit()
+        await db.refresh(f)
+        return f
+
+
+async def read_content(file: WorkspaceFile) -> str:
+    """Return file text, fetching from MinIO when offloaded."""
+    if file.content is not None:
+        return file.content
+    if file.storage_key:
+        data = await asyncio.to_thread(object_storage.get, file.storage_key)
+        return data.decode("utf-8", "ignore")
+    return ""
