@@ -484,6 +484,7 @@
   }
   .typing span:nth-child(2) { animation-delay: 0.15s; }
   .typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes bounce {
     0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
     30% { transform: translateY(-4px); opacity: 1; }
@@ -3290,3 +3291,19 @@ body[data-atmos="cinnabar"] {
   .md-body .fl-arrowhead { fill: #ad9f86; }
   .md-body .fl-elabel { fill: #6b6450; font-family: var(--font-mono); font-size: 10.5px; }
   .md-body .fl-elabel-bg { fill: #fffdf8; }
+
+  /* ── group channel chat ── */
+  .ch-row { display: flex; }
+  .ch-row.user { justify-content: flex-end; }
+  .ch-row.agent { justify-content: flex-start; }
+  .ch-bubble {
+    max-width: 72%; padding: 9px 14px; border-radius: 14px;
+    font-size: 13.5px; line-height: 1.55; word-break: break-word;
+  }
+  .ch-row.user .ch-bubble {
+    background: var(--accent); color: #fff; border-bottom-right-radius: 4px;
+  }
+  .ch-row.agent .ch-bubble {
+    background: var(--bg-panel); border: 1px solid var(--rule-soft); color: var(--ink);
+    border-bottom-left-radius: 4px;
+  }

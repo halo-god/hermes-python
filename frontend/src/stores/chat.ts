@@ -5,12 +5,14 @@ import { agentsApi } from "@/api/agents";
 import { teamsApi } from "@/api/teams";
 import { tokenStore } from "@/api/client";
 import type { Agent, Conversation, Message, Team, WorkspaceFile, StreamEvent, ConfirmationRequest } from "@/types";
+import type { Profile } from "@/api/agents";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api/v1";
 
 export const useChatStore = defineStore("chat", () => {
   const conversations = ref<Conversation[]>([]);
   const agents = ref<Agent[]>([]);
+  const profiles = ref<Profile[]>([]);
   const teams = ref<Team[]>([]);
   const activeId = ref<string | null>(null);
   const activeAgents = ref<string[]>(["hermes"]);
@@ -36,6 +38,14 @@ export const useChatStore = defineStore("chat", () => {
       agents.value = await agentsApi.list();
     } catch {
       agents.value = [];
+    }
+  }
+
+  async function loadProfiles() {
+    try {
+      profiles.value = await agentsApi.profiles();
+    } catch {
+      profiles.value = [];
     }
   }
 
@@ -296,6 +306,7 @@ export const useChatStore = defineStore("chat", () => {
   return {
     conversations,
     agents,
+    profiles,
     teams,
     activeId,
     activeAgents,
@@ -306,6 +317,7 @@ export const useChatStore = defineStore("chat", () => {
     pendingConfirmations,
     loadTeams,
     loadAgents,
+    loadProfiles,
     loadConversations,
     openConversation,
     newConversation,

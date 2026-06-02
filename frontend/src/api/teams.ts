@@ -66,4 +66,10 @@ export const teamsApi = {
     fd.append("file", file);
     await http.post(`/teams/${id}/knowledge/upload`, fd, { headers: { "Content-Type": "multipart/form-data" } });
   },
+  async getChannel(id: string): Promise<{ channel: import("@/types").Conversation; channel_mode: string }> {
+    return (await http.get(`/teams/${id}/channel`)).data;
+  },
+  async setChannelMode(id: string, channel_mode: string): Promise<{ channel_mode: string }> {
+    return (await http.patch(`/teams/${id}/channel/mode`, { channel_mode })).data;
+  },
 };

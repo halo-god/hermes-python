@@ -23,6 +23,7 @@ class Team(UUIDPrimaryKey, Timestamps, Base):
     join_mode: Mapped[str] = mapped_column(String(24), default="invite")
     policy: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     shared_agents: Mapped[list] = mapped_column(JSONB, default=lambda: ["hermes"])
+    channel_mode: Mapped[str] = mapped_column(String(16), default="mention", nullable=False)
 
     members: Mapped[list["TeamMember"]] = relationship(
         back_populates="team", cascade="all, delete-orphan"

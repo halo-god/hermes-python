@@ -31,6 +31,7 @@ class Conversation(UUIDPrimaryKey, Timestamps, Base):
     acp_session_id: Mapped[str | None] = mapped_column(String(128))
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     visibility: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
+    is_channel: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation",

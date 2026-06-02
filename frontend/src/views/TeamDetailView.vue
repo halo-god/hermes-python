@@ -2,7 +2,7 @@
 /* 1:1 port of the prototype team page (project/hermes-team.js), wired to the
    real API. Only the data wiring differs from the prototype; the markup/classes
    and UX structure are reproduced faithfully. */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import NewProjectModal from "@/components/NewProjectModal.vue";
@@ -103,7 +103,67 @@ function openKnowledgeFile(fileId: string) {
 
 watch(tab, (newTab) => {
   if (newTab !== "knowledge") showKnowledgePanel.value = false;
+  if (newTab === "channel") loadChannel();
 });
+
+// ── Group channel ──
+import { conversationsApi } from "@/api/conversations";
+import type { Conversation, Message } from "@/types";
+
+const channelConvo = ref<Conversation | null>(null);
+const channelMode = ref<string>("mention");
+const channelMessages = ref<Message[]>([]);
+const channelDraft = ref("");
+const channelLoading = ref(false);
+const channelSending = ref(false);
+const channelScroller = ref<HTMLElement | null>(null);
+
+async function loadChannel() {
+  if (channelLoading.value) return;
+  channelLoading.value = true;
+  try {
+    const res = await teamsApi.getChannel(teamId);
+    channelConvo.value = res.channel;
+    channelMode.value = res.channel_mode;
+    const detail = await conversationsApi.get(res.channel.id);
+    channelMessages.value = (detail as any).messages || [];
+    await nextTick();
+    if (channelScroller.value) channelScroller.value.scrollTop = channelScroller.value.scrollHeight;
+  } catch {
+    /* ignore */
+  } finally {
+    channelLoading.value = false;
+  }
+}
+
+async function sendChannelMessage() {
+  const text = channelDraft.value.trim();
+  if (!text || !channelConvo.value || channelSending.value) return;
+  channelDraft.value = "";
+  channelSending.value = true;
+  try {
+    const mentionMatch = text.match(/@([\w-]+)/);
+    const shouldRespond = !!mentionMatch || channelMode.value === "always";
+    if (shouldRespond) {
+      const agentId = mentionMatch ? mentionMatch[1] : "hermes";
+      await conversationsApi.send(channelConvo.value.id, text);
+      void agentId;
+    } else {
+      await conversationsApi.send(channelConvo.value.id, text);
+    }
+    const detail = await conversationsApi.get(channelConvo.value.id);
+    channelMessages.value = (detail as any).messages || [];
+    await nextTick();
+    if (channelScroller.value) channelScroller.value.scrollTop = channelScroller.value.scrollHeight;
+  } finally {
+    channelSending.value = false;
+  }
+}
+
+async function updateChannelMode(mode: string) {
+  channelMode.value = mode;
+  await teamsApi.setChannelMode(teamId, mode);
+}
 
 // ── computed stat footer values using real data ──
 const lastKnowledgeUpdate = computed(() => {
@@ -219,6 +279,7 @@ const policyArrays = computed<Record<string, string[]>>(() => {
 
 const tabs: { id: string; label: string; countKey?: string }[] = [
   { id: "overview", label: "概览" },
+  { id: "channel", label: "群聊" },
   { id: "projects", label: "项目", countKey: "__projects" },
   { id: "members", label: "成员", countKey: "members" },
   { id: "agents", label: "共享助手", countKey: "agents" },
@@ -548,6 +609,51 @@ async function deleteTeam() {
               <button v-if="can('knowledge.upload')" class="row-act" title="编辑元数据" @click="editKnowledge(f)"><Icon name="edit" :size="13" /></button>
               <button v-if="can('knowledge.delete')" class="row-act danger" title="删除" @click="deleteKnowledge(f.id)"><Icon name="close" :size="13" /></button>
             </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- CHANNEL (group chat) -->
+      <template v-else-if="tab === 'channel'">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px">
+          <div>
+            <div style="font-family:var(--font-serif);font-size:22px;font-weight:600;color:var(--ink)">群聊频道</div>
+            <div style="font-size:12.5px;color:var(--ink-mute);margin-top:2px">团队成员共享频道 · 输入 @助手名 呼出助手，或开启「始终响应」模式</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;color:var(--ink-mute)">响应模式：</span>
+            <select :value="channelMode" @change="updateChannelMode(($event.target as HTMLSelectElement).value)"
+              style="font-size:12.5px;padding:4px 8px;border:1px solid var(--rule);border-radius:6px;background:var(--bg-canvas);color:var(--ink)">
+              <option value="off">不自动响应</option>
+              <option value="mention">@提及响应</option>
+              <option value="always">始终响应</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="section-card" style="display:flex;flex-direction:column;height:520px">
+          <div ref="channelScroller" style="flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:10px">
+            <div v-if="channelLoading" style="text-align:center;color:var(--ink-mute);font-size:13px;padding:40px 0">加载中…</div>
+            <div v-else-if="!channelMessages.length" style="text-align:center;color:var(--ink-mute);font-size:13px;padding:40px 0">
+              还没有消息。发送 @hermes + 问题，或开启「始终响应」模式。
+            </div>
+            <template v-for="m in channelMessages" :key="m.id">
+              <div :class="m.role === 'user' ? 'ch-row user' : 'ch-row agent'">
+                <div class="ch-bubble" v-html="m.role === 'user' ? m.content.text : (m.content.markdown || m.content.text)"></div>
+              </div>
+            </template>
+          </div>
+          <div style="padding:10px 14px;border-top:1px solid var(--rule-soft);display:flex;gap:8px;align-items:flex-end">
+            <textarea
+              v-model="channelDraft"
+              placeholder="发消息… 输入 @hermes 呼出助手"
+              rows="2"
+              style="flex:1;resize:none;padding:8px 12px;border:1px solid var(--rule);border-radius:8px;font-size:13.5px;background:var(--bg-canvas);color:var(--ink);outline:none;font-family:inherit"
+              @keydown.enter.exact.prevent="sendChannelMessage"
+            ></textarea>
+            <button class="btn primary" :disabled="!channelDraft.trim() || channelSending" @click="sendChannelMessage" style="height:36px;min-width:60px">
+              <Icon name="send" :size="14" />
+            </button>
           </div>
         </div>
       </template>
