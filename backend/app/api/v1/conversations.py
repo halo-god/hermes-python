@@ -413,10 +413,14 @@ async def get_file_raw(
     else:
         raise HTTPException(status_code=404, detail="文件内容不存在")
 
+    from urllib.parse import quote
+    ascii_name = f.name.encode("ascii", "ignore").decode() or "file"
     return Response(
         content=data,
         media_type=mime,
-        headers={"Content-Disposition": f'inline; filename="{f.name}"'},
+        headers={
+            "Content-Disposition": f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(f.name)}"
+        },
     )
 
 

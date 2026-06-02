@@ -457,10 +457,14 @@ async def get_knowledge_raw(
         except Exception:
             data = k.content.encode("utf-8")
 
+    from urllib.parse import quote
     safe_name = k.name.replace('"', "_").replace("\\", "_")
+    ascii_name = safe_name.encode("ascii", "ignore").decode() or "file"
     return Response(
         content=data, media_type=mime,
-        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        headers={
+            "Content-Disposition": f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
+        },
     )
 
 
