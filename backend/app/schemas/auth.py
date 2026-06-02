@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from app.schemas.user import UserOut
 
@@ -37,3 +37,8 @@ class ProviderInfo(BaseModel):
     label: str
     enabled: bool
     kind: str  # local | ldap | wecom | saml | oidc | feishu
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)

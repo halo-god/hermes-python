@@ -365,12 +365,20 @@ async def get_file(
 async def get_file_raw(
     conversation_id: uuid.UUID,
     file_id: uuid.UUID,
-    access_token: str = Query(...),
+    request: Request,
+    access_token: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     from fastapi.responses import Response
 
-    user = await user_from_access_token(access_token, db)
+    token: str | None = access_token
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer "):]
+    if not token:
+        raise HTTPException(status_code=401, detail="未认证")
+    user = await user_from_access_token(token, db)
     await _require_convo(db, conversation_id, user)
     f = await db.get(WorkspaceFile, file_id)
     if f is None or f.conversation_id != conversation_id:

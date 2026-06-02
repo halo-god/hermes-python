@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class AdminUserUpdate(BaseModel):
@@ -110,3 +110,10 @@ class MappingCreate(BaseModel):
     dept: str | None = None
     default_role: str = "member"
     auto_join_team_id: uuid.UUID | None = None
+
+    @field_validator("source_value")
+    @classmethod
+    def source_value_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("source_value 不能为空")
+        return v

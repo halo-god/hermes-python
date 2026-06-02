@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File as FastApiFile, HTTPException, Quer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import governance as gov
+from app.core.rbac import require_admin
 from app.db.base import get_db
 from app.db.models.user import User
 from app.deps import get_current_user
@@ -57,7 +58,9 @@ async def list_teams(user: User = Depends(get_current_user), db: AsyncSession = 
 
 @router.post("/teams", response_model=TeamDetail, status_code=201)
 async def create_team(
-    payload: TeamCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    payload: TeamCreate,
+    user: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
 ):
     team = await svc.create_team(
         db, user, name=payload.name, handle=payload.handle,

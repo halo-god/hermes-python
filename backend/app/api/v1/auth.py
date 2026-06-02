@@ -8,6 +8,7 @@ from app.db.base import get_db
 from app.db.models.user import User
 from app.deps import get_current_user
 from app.schemas.auth import (
+    ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
     ProviderInfo,
@@ -62,6 +63,21 @@ async def logout(req: RefreshRequest | None = None) -> Response:
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    from app.core.security import verify_password, hash_password
+
+    if not user.password_hash or not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="当前密码不正确")
+    user.password_hash = hash_password(req.new_password)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/providers", response_model=list[ProviderInfo])
