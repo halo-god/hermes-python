@@ -65,5 +65,8 @@ export const adminApi = {
   async testProvider(pid: string): Promise<{ ok: boolean; message: string }> {
     return (await http.post(`/admin/identity/${pid}/test`)).data;
   },
+  async togglePermission(perm_id: string, role: string, granted: boolean): Promise<void> {
+    await http.patch("/admin/roles/permissions", { perm_id, role, granted });
+  },
 };
 

@@ -7,13 +7,14 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel as _BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import ratelimit
-from app.core.rbac import PERMISSION_CATALOG, ROLE_META, require_admin
+from app.core.rbac import PERMISSION_CATALOG, ROLE_META, ROLE_ORDER, require_admin  # noqa: F401
 from app.db.base import get_db
-from app.db.models.audit import AuditLog
+from app.db.models.audit import AuditLog  # noqa: F401
 from app.db.models.conversation import Conversation, Message
 from app.db.models.team import Team
 from app.db.models.agent import Agent
@@ -73,11 +74,24 @@ async def stats(db: AsyncSession = Depends(get_db)):
 
 
 # ── roles & permission matrix ──
+def _build_permissions(overrides: dict) -> list[dict]:
+    """Merge hardcoded PERMISSION_CATALOG with stored overrides."""
+    import copy
+    catalog = copy.deepcopy(PERMISSION_CATALOG)
+    for group in catalog:
+        for item in group["items"]:
+            if item["id"] in overrides:
+                item["roles"] = overrides[item["id"]]
+    return catalog
+
+
 @router.get("/roles", response_model=RolesMatrixOut)
 async def roles(db: AsyncSession = Depends(get_db)):
     """Platform RBAC: role catalog (with live user counts) + permission matrix."""
     role_rows = (await db.execute(select(User.role, func.count()).group_by(User.role))).all()
     counts = {r or "member": int(n) for r, n in role_rows}
+    settings = await settings_service.get(db)
+    overrides: dict = (settings.data or {}).get("permission_overrides", {})
     return RolesMatrixOut(
         roles=[
             RoleOut(
@@ -86,8 +100,60 @@ async def roles(db: AsyncSession = Depends(get_db)):
             )
             for m in ROLE_META
         ],
-        permissions=[PermissionGroup(**g) for g in PERMISSION_CATALOG],
+        permissions=[PermissionGroup(**g) for g in _build_permissions(overrides)],
     )
+
+
+class PermissionToggle(_BaseModel):
+    perm_id: str
+    role: str
+    granted: bool
+
+
+@router.patch("/roles/permissions")
+async def toggle_permission(
+    payload: PermissionToggle,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle a permission-role assignment. super_admin only."""
+    if ROLE_ORDER.get(admin.role, 0) < ROLE_ORDER.get("super_admin", 0):
+        raise HTTPException(status_code=403, detail="仅超级管理员可修改权限矩阵")
+    # Find the permission in the catalog
+    found = False
+    for group in PERMISSION_CATALOG:
+        for item in group["items"]:
+            if item["id"] == payload.perm_id:
+                found = True
+                break
+    if not found:
+        raise HTTPException(status_code=404, detail="权限不存在")
+    if payload.role not in ROLE_ORDER:
+        raise HTTPException(status_code=422, detail="角色不存在")
+
+    settings = await settings_service.get(db)
+    data = dict(settings.data or {})
+    overrides: dict = dict(data.get("permission_overrides", {}))
+
+    # Get current roles for this permission (from overrides or catalog)
+    current_roles: list[str] = overrides.get(payload.perm_id, None)
+    if current_roles is None:
+        for group in PERMISSION_CATALOG:
+            for item in group["items"]:
+                if item["id"] == payload.perm_id:
+                    current_roles = list(item["roles"])
+                    break
+
+    current_roles = list(current_roles or [])
+    if payload.granted and payload.role not in current_roles:
+        current_roles.append(payload.role)
+    elif not payload.granted and payload.role in current_roles:
+        current_roles.remove(payload.role)
+
+    overrides[payload.perm_id] = current_roles
+    data["permission_overrides"] = overrides
+    await settings_service.update(db, data)
+    return {"perm_id": payload.perm_id, "role": payload.role, "granted": payload.granted}
 
 
 # ── user management ──

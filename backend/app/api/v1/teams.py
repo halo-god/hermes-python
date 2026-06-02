@@ -9,6 +9,8 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File as FastApiFile, HTTPException, Query, UploadFile
+from pydantic import BaseModel as _BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import governance as gov
@@ -101,6 +103,55 @@ async def delete_team(
         raise HTTPException(status_code=403, detail="仅所有者可解散团队")
     await db.delete(team)
     await db.commit()
+
+
+# ── team channel ──
+class ChannelModeUpdate(_BaseModel):
+    channel_mode: str  # "off" | "mention" | "always"
+
+
+@router.get("/teams/{team_id}/channel")
+async def get_team_channel(
+    team_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Return (or create) the team's shared channel conversation."""
+    from app.db.models.conversation import Conversation
+    from app.schemas.conversation import ConversationOut
+    from sqlalchemy import and_
+    team, _ = await svc.require_membership(db, team_id, user.id)
+    res = await db.execute(
+        select(Conversation).where(
+            and_(Conversation.team_id == team_id, Conversation.is_channel.is_(True))
+        ).limit(1)
+    )
+    channel = res.scalar_one_or_none()
+    if channel is None:
+        channel = Conversation(
+            owner_id=user.id,
+            title=f"{team.name} · 群聊频道",
+            primary_agent_id="hermes",
+            team_id=team_id,
+            is_channel=True,
+        )
+        db.add(channel)
+        await db.commit()
+        await db.refresh(channel)
+    return {"channel": ConversationOut.model_validate(channel), "channel_mode": team.channel_mode}
+
+
+@router.patch("/teams/{team_id}/channel/mode")
+async def set_channel_mode(
+    team_id: uuid.UUID, payload: ChannelModeUpdate,
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    team, member = await svc.require_membership(db, team_id, user.id)
+    if member.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="仅所有者/管理员可修改频道设置")
+    if payload.channel_mode not in ("off", "mention", "always"):
+        raise HTTPException(status_code=422, detail="channel_mode 无效")
+    team.channel_mode = payload.channel_mode
+    await db.commit()
+    return {"channel_mode": team.channel_mode}
 
 
 # ── members ──

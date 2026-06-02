@@ -48,6 +48,10 @@ const P: Record<string, string> = {
   mask: '<path d="M2 12c0 5 4 9 10 9s10-4 10-9c0-3-3-7-10-7S2 9 2 12z"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/>',
   wing: '<path d="M3 14c2-7 8-9 13-8-2 1-3 3-4 5 2-1 4-1 6 0-2 2-5 3-8 3 1 1 3 2 5 2-3 2-7 2-10 1-2 0-3-1-2-3z"/>',
   brand: '<path d="M5 4v16M19 4v16M5 12h14" stroke-width="2.4" stroke-linecap="round"/><path d="M3 6c1 0 2 1 2 2M21 6c-1 0-2 1-2 2" stroke-linecap="round" stroke-width="1.6" fill="none"/>',
+  edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+  at: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/>',
+  send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  channel: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
 };
 
 const path = computed(() => P[props.name] || "");

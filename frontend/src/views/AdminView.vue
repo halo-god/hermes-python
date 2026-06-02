@@ -9,6 +9,7 @@ import Icon from "@/components/Icon.vue";
 import { adminApi } from "@/api/admin";
 import { agentsApi, type Profile, type ProfileCreate } from "@/api/agents";
 import { http } from "@/api/client";
+import { useAuthStore } from "@/stores/auth";
 import type {
   AdminRole,
   AdminStats,
@@ -19,6 +20,9 @@ import type {
   SystemSettings,
   User,
 } from "@/types";
+
+const authStore = useAuthStore();
+const isSuperAdmin = computed(() => authStore.user?.role === "super_admin");
 
 const tab = ref<"overview" | "users" | "roles" | "identity" | "audit" | "assistants" | "system">("overview");
 const stats = ref<AdminStats | null>(null);
@@ -110,6 +114,20 @@ async function loadRoles() {
   const m = await adminApi.roles();
   roles.value = m.roles;
   permissions.value = m.permissions;
+}
+
+const permTogglingKey = ref<string | null>(null);
+
+async function togglePermission(permId: string, roleId: string, currentlyGranted: boolean) {
+  if (!isSuperAdmin.value) return;
+  const key = `${permId}:${roleId}`;
+  permTogglingKey.value = key;
+  try {
+    await adminApi.togglePermission(permId, roleId, !currentlyGranted);
+    await loadRoles();
+  } finally {
+    permTogglingKey.value = null;
+  }
 }
 async function loadIdentity() {
   providers.value = await adminApi.identity();
@@ -553,7 +571,11 @@ async function deleteProfileItem(p: Profile) {
           </div>
         </div>
 
-        <div style="font-family: var(--font-serif); font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 10px">权限矩阵</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="font-family: var(--font-serif); font-size: 16px; font-weight: 600; color: var(--ink)">权限矩阵</div>
+          <span v-if="isSuperAdmin" style="font-size:11.5px;color:var(--ink-mute);padding:2px 8px;background:rgba(184,133,42,0.1);border-radius:6px">点击单元格可切换权限</span>
+          <span v-else style="font-size:11.5px;color:var(--ink-mute)">仅超级管理员可修改</span>
+        </div>
         <div class="perm-table">
           <div class="perm-grid" :style="{ gridTemplateColumns: '1.6fr repeat(' + roles.length + ', 1fr)' }">
             <div class="cell head">权限</div>
@@ -566,9 +588,14 @@ async function deleteProfileItem(p: Profile) {
                   {{ p.name }}
                   <span class="perm-system-tag" style="font-family: var(--font-mono)">{{ p.id }}</span>
                 </div>
-                <div v-for="r in roles" :key="r.id" class="cell center">
-                  <div v-if="p.roles.includes(r.id)" class="perm-check"><Icon name="check" /></div>
-                  <div v-else class="perm-blank"></div>
+                <div v-for="r in roles" :key="r.id" class="cell center"
+                  :style="isSuperAdmin ? 'cursor:pointer;' : ''"
+                  :title="isSuperAdmin ? (p.roles.includes(r.id) ? '点击移除权限' : '点击授予权限') : ''"
+                  @click="isSuperAdmin && togglePermission(p.id, r.id, p.roles.includes(r.id))"
+                >
+                  <div v-if="permTogglingKey === p.id + ':' + r.id" style="width:14px;height:14px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;margin:auto"></div>
+                  <div v-else-if="p.roles.includes(r.id)" class="perm-check" :style="isSuperAdmin ? 'transition:opacity 0.15s;' : ''"><Icon name="check" /></div>
+                  <div v-else class="perm-blank" :style="isSuperAdmin ? 'min-width:14px;min-height:14px;border-radius:3px;border:1.5px dashed var(--rule);' : ''"></div>
                 </div>
               </template>
             </template>

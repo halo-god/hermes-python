@@ -47,7 +47,8 @@ async def get_conversation(
 ) -> Conversation | None:
     res = await db.execute(
         select(Conversation).where(
-            Conversation.id == conversation_id, Conversation.owner_id == owner_id
+            Conversation.id == conversation_id,
+            (Conversation.owner_id == owner_id) | Conversation.is_channel.is_(True),
         )
     )
     return res.scalar_one_or_none()

@@ -33,6 +33,7 @@ const AGENT_TABS = ["全部", "官方", "协作", "办公", "创作"];
 
 onMounted(async () => {
   if (!chat.agents.length) await chat.loadAgents();
+  if (!chat.profiles.length) await chat.loadProfiles();
   const cid = route.query.c as string | undefined;
   const teamCtx = route.query.team as string | undefined;
   const projCtx = route.query.project as string | undefined;
@@ -84,10 +85,32 @@ const convoProjectName = computed(() => {
 function agentById(id: string): Agent | undefined {
   return chat.agents.find((a) => a.id === id);
 }
+
+// Return display info for an agent, preferring profile data over raw agent metadata.
+function agentDisplay(id: string): { label: string; icon: string; color: string; description: string } {
+  const profile = chat.profiles.find((p) => p.default_agent_id === id || p.handle === id);
+  if (profile) return { label: profile.name, icon: profile.icon || "sparkle", color: profile.color || "#b8852a", description: profile.desc || "" };
+  const raw = agentById(id);
+  return { label: raw?.label || id, icon: raw?.icon || "sparkle", color: raw?.color || "#b8852a", description: raw?.description || "" };
+}
+
 function md(text: string) {
   return renderMarkdown(text);
 }
-const availableToAdd = computed(() => chat.agents.filter((a) => a.available && !chat.activeAgents.includes(a.id)));
+
+// Profiles available to add to the roundtable (each maps to a unique agent).
+const availableToAdd = computed(() => {
+  const activeProfileAgentIds = new Set(chat.activeAgents);
+  // Prefer profiles for the picker; fall back to raw agents that have no profile.
+  const profileItems = chat.profiles
+    .filter((p) => p.is_active && p.default_agent_id && !activeProfileAgentIds.has(p.default_agent_id))
+    .map((p) => ({ id: p.default_agent_id, label: p.name, icon: p.icon || "sparkle", color: p.color || "#b8852a", description: p.desc || "" }));
+  const profileAgentIds = new Set(profileItems.map((p) => p.id));
+  const rawItems = chat.agents
+    .filter((a) => a.available && !activeProfileAgentIds.has(a.id) && !profileAgentIds.has(a.id))
+    .map((a) => ({ id: a.id, label: a.label, icon: a.icon || "sparkle", color: a.color || "#b8852a", description: a.description || "" }));
+  return [...profileItems, ...rawItems];
+});
 
 async function scrollDown() {
   await nextTick();
@@ -237,8 +260,8 @@ const wsAdapter = computed<WsAdapter>(() => {
           <!-- agent switcher -->
           <div class="agent-bar" style="align-self: flex-start">
             <button v-for="aid in chat.activeAgents" :key="aid" class="agent-chip" :class="{ active: aid === activeConvo?.primary_agent_id }">
-              <span class="avatar" :style="{ background: agentById(aid)?.color || '#b8852a' }"><Icon :name="agentById(aid)?.icon || 'brand'" :size="11" /></span>
-              {{ agentById(aid)?.label || aid }}
+              <span class="avatar" :style="{ background: agentDisplay(aid).color }"><Icon :name="agentDisplay(aid).icon" :size="11" /></span>
+              {{ agentDisplay(aid).label }}
               <span v-if="aid !== 'hermes'" style="margin-left:4px;cursor:pointer;color:var(--ink-mute);" @click.stop="chat.toggleAgent(aid)">×</span>
             </button>
             <span class="agent-divider"></span>
@@ -247,7 +270,7 @@ const wsAdapter = computed<WsAdapter>(() => {
               <div v-if="showAgentMenu" class="menu" style="top: 32px; left: 0; min-width: 240px">
                 <div class="menu-label">添加助手（圆桌）</div>
                 <button v-for="a in availableToAdd" :key="a.id" class="menu-item" @click="chat.toggleAgent(a.id); showAgentMenu = false">
-                  <Icon :name="a.icon || 'sparkle'" :style="{ color: a.color || '#b8852a' }" />
+                  <Icon :name="a.icon" :style="{ color: a.color }" />
                   <span class="m-name">{{ a.label }}</span><span class="m-tag">{{ a.description }}</span>
                 </button>
                 <div v-if="!availableToAdd.length" class="menu-item"><span class="m-name" style="color:var(--ink-mute)">没有更多助手</span></div>
@@ -262,9 +285,9 @@ const wsAdapter = computed<WsAdapter>(() => {
               <div class="roundtable-label">圆桌 · {{ m.content.replies?.length || 0 }} 位助手并行作答</div>
               <div v-for="(r, idx) in m.content.replies" :key="idx" class="rt-card">
                 <div class="rt-card-head">
-                  <span class="rt-avatar" :style="{ background: agentById(r.agent_id)?.color || '#b8852a' }"><Icon :name="agentById(r.agent_id)?.icon || 'sparkle'" :size="11" /></span>
-                  <span class="rt-name">{{ agentById(r.agent_id)?.label || r.agent_id }}</span>
-                  <span class="rt-stance">— {{ agentById(r.agent_id)?.description }}</span>
+                  <span class="rt-avatar" :style="{ background: agentDisplay(r.agent_id).color }"><Icon :name="agentDisplay(r.agent_id).icon" :size="11" /></span>
+                  <span class="rt-name">{{ agentDisplay(r.agent_id).label }}</span>
+                  <span class="rt-stance">— {{ agentDisplay(r.agent_id).description }}</span>
                 </div>
                 <div class="rt-card-body">
                   <span v-if="r.status === 'streaming' && !r.text" class="typing"><span></span><span></span><span></span></span>
