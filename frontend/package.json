@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
@@ -30,8 +32,11 @@
     "@types/katex": "^0.16.8",
     "@types/markdown-it": "^14.1.2",
     "@vitejs/plugin-vue": "^5.1.0",
+    "@vue/test-utils": "^2.4.10",
+    "jsdom": "^29.1.1",
     "typescript": "^5.5.3",
     "vite": "^5.4.0",
+    "vitest": "^4.1.8",
     "vue-tsc": "^2.0.29"
   }
 }
