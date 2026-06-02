@@ -60,7 +60,8 @@ const md: MarkdownIt = new MarkdownIt({
         return hljs.highlight(str, { language: lang }).value;
       } catch { /* fall through */ }
     }
-    return MarkdownIt.prototype.utils.escapeHtml(str);
+    // Inline HTML escape (MarkdownIt.prototype.utils is undefined in ESM)
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 });
 
