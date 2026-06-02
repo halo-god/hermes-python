@@ -60,19 +60,6 @@ onMounted(async () => {
   }
 });
 
-// Load team knowledge when the active conversation has a team_id
-watch(
-  () => activeConvo.value?.team_id,
-  async (tid) => {
-    if (tid) {
-      try { teamKnowledge.value = await teamsApi.listKnowledge(tid); } catch { teamKnowledge.value = []; }
-    } else {
-      teamKnowledge.value = [];
-    }
-  },
-  { immediate: true }
-);
-
 // ── Greeting: time-aware + voice-aware ──
 const greeting = computed(() => {
   const hour = new Date().getHours();
@@ -95,6 +82,19 @@ const hermes = computed(() => chat.agents.find((a) => a.id === "hermes"));
 const landingAgent = computed(() => agentById(landingAgentId.value) || hermes.value);
 const activeConvo = computed(() => chat.conversations.find((c) => c.id === chat.activeId));
 const primaryAgent = computed(() => agentById(activeConvo.value?.primary_agent_id || "hermes") || hermes.value);
+
+// Load team knowledge when the active conversation has a team_id
+watch(
+  () => activeConvo.value?.team_id,
+  async (tid) => {
+    if (tid) {
+      try { teamKnowledge.value = await teamsApi.listKnowledge(tid); } catch { teamKnowledge.value = []; }
+    } else {
+      teamKnowledge.value = [];
+    }
+  },
+  { immediate: true }
+);
 
 // ── Team / project context tags in thread meta ──
 const convoTeamName = computed(() => {
