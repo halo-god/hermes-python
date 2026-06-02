@@ -21,6 +21,8 @@ export const useChatStore = defineStore("chat", () => {
   const streaming = ref(false);
   const loading = ref(false);
   const pendingConfirmations = ref<ConfirmationRequest[]>([]);
+  const hasMoreMessages = ref(true);
+  const loadingOlder = ref(false);
 
   let es: EventSource | null = null;
   let ws: WebSocket | null = null;
@@ -62,13 +64,39 @@ export const useChatStore = defineStore("chat", () => {
     closeStream();
     activeId.value = id;
     loading.value = true;
+    hasMoreMessages.value = true;
     try {
       const detail = await conversationsApi.get(id);
       messages.value = detail.messages;
+      // If we got fewer than 50, there are no older messages
+      hasMoreMessages.value = detail.messages.length >= 50;
       activeAgents.value = detail.active_agent_ids || ["hermes"];
       files.value = await conversationsApi.files(id);
     } finally {
       loading.value = false;
+    }
+  }
+
+  async function loadMoreMessages() {
+    if (!activeId.value || loadingOlder.value || !hasMoreMessages.value) return;
+    loadingOlder.value = true;
+    try {
+      const oldest = messages.value[0];
+      if (!oldest) { hasMoreMessages.value = false; return; }
+      const older = await conversationsApi.getMessages(activeId.value, {
+        limit: 50,
+        before: oldest.id,
+      });
+      if (older.length === 0) {
+        hasMoreMessages.value = false;
+      } else {
+        messages.value = [...older, ...messages.value];
+        if (older.length < 50) hasMoreMessages.value = false;
+      }
+    } catch {
+      // silently fail
+    } finally {
+      loadingOlder.value = false;
     }
   }
 
@@ -317,11 +345,14 @@ export const useChatStore = defineStore("chat", () => {
     streaming,
     loading,
     pendingConfirmations,
+    hasMoreMessages,
+    loadingOlder,
     loadTeams,
     loadAgents,
     loadProfiles,
     loadConversations,
     openConversation,
+    loadMoreMessages,
     newConversation,
     newConversationWithProfile,
     landing,

@@ -25,6 +25,7 @@ const router = useRouter();
 
 const draft = ref("");
 const scroller = ref<HTMLElement | null>(null);
+const loadMoreSentinel = ref<HTMLElement | null>(null);
 const showWorkspace = ref(false);
 const showAgentMenu = ref(false);
 const showExtractModal = ref(false);
@@ -58,6 +59,32 @@ onMounted(async () => {
     if (seed) draft.value = seed;
     await scrollDown();
   }
+  // Observe load-more sentinel for infinite scroll
+  setupLoadMoreObserver();
+});
+
+// ── Infinite scroll: load older messages when sentinel is visible ──
+let observer: IntersectionObserver | null = null;
+function setupLoadMoreObserver() {
+  observer = new IntersectionObserver(
+    async (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && chat.hasMoreMessages && !chat.loadingOlder && chat.activeId) {
+          const el = scroller.value;
+          const prevHeight = el?.scrollHeight || 0;
+          await chat.loadMoreMessages();
+          // Preserve scroll position after prepending
+          await nextTick();
+          if (el) el.scrollTop = el.scrollHeight - prevHeight;
+        }
+      }
+    },
+    { root: scroller.value, threshold: 0.1 }
+  );
+  if (loadMoreSentinel.value) observer.observe(loadMoreSentinel.value);
+}
+watch(loadMoreSentinel, (el) => {
+  if (el && observer) observer.observe(el);
 });
 
 // ── Greeting: time-aware + voice-aware ──
@@ -337,6 +364,10 @@ const wsAdapter = computed<WsAdapter>(() => {
           </div>
 
           <!-- messages -->
+          <div v-if="chat.hasMoreMessages || chat.loadingOlder" ref="loadMoreSentinel" class="load-more-sentinel">
+            <span v-if="chat.loadingOlder" class="loading-spinner"></span>
+            <span v-else class="load-more-hint">↑ 上滑加载更多消息</span>
+          </div>
           <template v-for="m in chat.messages" :key="m.id">
             <!-- roundtable -->
             <div v-if="m.role === 'roundtable'" class="roundtable">

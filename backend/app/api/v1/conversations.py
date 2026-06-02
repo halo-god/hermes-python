@@ -108,11 +108,26 @@ async def get_conversation(
     db: AsyncSession = Depends(get_db),
 ):
     convo = await _require_convo(db, conversation_id, user)
-    msgs = await svc.get_messages(db, convo.id)
+    # Initial load: last 50 messages
+    msgs = await svc.get_messages(db, convo.id, limit=50)
     return ConversationDetail(
         **ConversationOut.model_validate(convo).model_dump(),
         messages=[MessageOut.model_validate(m) for m in msgs],
     )
+
+
+@router.get("/{conversation_id}/messages", response_model=list[MessageOut])
+async def get_messages_page(
+    conversation_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    before: uuid.UUID | None = Query(None, description="Cursor: message ID to fetch before"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Paginated message fetch. Use *before* cursor for infinite scroll (load older)."""
+    await _require_convo(db, conversation_id, user)
+    msgs = await svc.get_messages(db, conversation_id, limit=limit, before_id=before)
+    return [MessageOut.model_validate(m) for m in msgs]
 
 
 @router.patch("/{conversation_id}", response_model=ConversationOut)
