@@ -29,6 +29,7 @@ export default {
     search: "Search",
     schedule: "Scheduled Tasks",
     files: "Files",
+    terminal: "Terminal",
     teams: "Teams",
     admin: "Admin",
     settings: "Settings",

@@ -137,6 +137,9 @@ async function shareConvo(id: string) {
         <div class="side-row" :class="{ active: route.name === 'files' }" @click="router.push('/files')">
           <Icon name="folder" class="ico" /> {{ t('nav.files') }}
         </div>
+        <div v-if="isAdmin" class="side-row" :class="{ active: route.name === 'terminal' }" @click="router.push('/terminal')">
+          <Icon name="sparkle" class="ico" /> {{ t('nav.terminal') }}
+        </div>
       </div>
 
       <div class="side-label">

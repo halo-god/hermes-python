@@ -38,6 +38,12 @@ const router = createRouter({
           name: "files",
           component: () => import("@/views/FilesView.vue"),
         },
+        {
+          path: "terminal",
+          name: "terminal",
+          component: () => import("@/views/TerminalView.vue"),
+          meta: { requiresAdmin: true },
+        },
       ],
     },
     {

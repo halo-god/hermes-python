@@ -29,6 +29,7 @@ export default {
     search: "搜索",
     schedule: "定时任务",
     files: "文件管理",
+    terminal: "终端",
     teams: "团队",
     admin: "后台管理",
     settings: "个人设置",
