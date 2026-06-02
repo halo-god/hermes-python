@@ -71,9 +71,10 @@ async function ensureMermaid() {
   if (mermaidReady) return;
   try {
     const { default: mermaid } = await import("mermaid");
+    const isDark = document.body.classList.contains("dark");
     mermaid.initialize({
       startOnLoad: false,
-      theme: "default",
+      theme: isDark ? "dark" : "default",
       securityLevel: "loose",
     });
     (window as any).__mermaid = mermaid;
@@ -81,6 +82,11 @@ async function ensureMermaid() {
   } catch {
     // mermaid not available — skip diagram rendering
   }
+}
+
+/** Re-initialize mermaid when theme changes. Call from theme toggle. */
+export function resetMermaidTheme() {
+  mermaidReady = false;
 }
 
 async function renderMermaidBlocks(html: string): Promise<string> {

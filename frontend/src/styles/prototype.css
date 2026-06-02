@@ -3305,6 +3305,9 @@ body[data-atmos="cinnabar"] {
   body.dark .md-body .mermaid-wrapper, body[data-atmos="night"] .md-body .mermaid-wrapper {
     background: #1a1a2e; border-color: rgba(255,255,255,0.1);
   }
+  body.dark .md-body .mermaid-error {
+    background: #2a1515; border-color: #4a2020; color: #e08080;
+  }
 
   /* ── highlight.js overrides for dark code blocks ── */
   .md-body pre .hljs-keyword { color: #c792ea; }

@@ -10,6 +10,7 @@ import NewConversationModal from "@/components/NewConversationModal.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import { useNotificationStore } from "@/stores/notifications";
+import { useTheme } from "@/composables/useTheme";
 import { conversationsApi } from "@/api/conversations";
 
 const auth = useAuthStore();
@@ -17,6 +18,7 @@ const chat = useChatStore();
 const ns = useNotificationStore();
 const router = useRouter();
 const route = useRoute();
+const { theme, toggleTheme } = useTheme();
 const showNewTeam = ref(false);
 const showNewConvo = ref(false);
 
@@ -179,6 +181,10 @@ async function shareConvo(id: string) {
       </div>
 
       <div class="side-foot" v-if="auth.user">
+        <div class="side-row" @click="toggleTheme" title="切换亮/暗色主题">
+          <Icon :name="theme === 'dark' ? 'sun' : 'moon'" class="ico" />
+          {{ theme === 'dark' ? '亮色模式' : '暗色模式' }}
+        </div>
         <div v-if="isAdmin" class="side-row" :class="{ active: route.name === 'admin' }" @click="router.push('/admin')">
           <Icon name="settings" class="ico" /> 后台管理
           <span class="badge" style="background: var(--accent-tint); color: var(--accent-deep); font-weight: 600">ADMIN</span>
