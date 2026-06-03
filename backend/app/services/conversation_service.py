@@ -150,6 +150,29 @@ async def _resolve_attached_files(
     return result
 
 
+async def send_user_only(
+    db: AsyncSession,
+    convo: Conversation,
+    text: str,
+    attached_file_ids: list[str] | None = None,
+    owner_id: uuid.UUID | None = None,
+) -> tuple[Message, None]:
+    """Save a user message without triggering agent (for channel mention mode)."""
+    user_msg = Message(
+        conversation_id=convo.id,
+        owner_id=owner_id,
+        role="user",
+        content={"text": text},
+        status="complete",
+    )
+    db.add(user_msg)
+    if convo.title == "新会话":
+        convo.title = text[:40]
+    await db.commit()
+    await db.refresh(user_msg)
+    return user_msg, None
+
+
 async def send_message(
     db: AsyncSession,
     convo: Conversation,
@@ -352,9 +375,12 @@ async def dispatch(
     text: str,
     attached_file_ids: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
-) -> tuple[Message, Message]:
+    skip_agent: bool = False,
+) -> tuple[Message, Message | None]:
     """Route to single or roundtable based on the conversation's active agents."""
     agents = list(convo.active_agent_ids or [convo.primary_agent_id])
+    if skip_agent:
+        return await send_user_only(db, convo, text, attached_file_ids=attached_file_ids, owner_id=owner_id)
     if len(agents) > 1:
         return await send_roundtable(db, convo, text, agents, attached_file_ids=attached_file_ids, owner_id=owner_id)
     return await send_message(db, convo, text, attached_file_ids=attached_file_ids, owner_id=owner_id)

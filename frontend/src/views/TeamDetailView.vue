@@ -245,10 +245,11 @@ async function sendChannelMessage() {
   if (channelMode.value === "mention" && !hasMention) {
     // Save user message without triggering agent
     try {
-      await conversationsApi.send(channelConvo.value.id, text);
+      const res = await conversationsApi.send(channelConvo.value.id, text, { skipAgent: true });
+      channelMessages.value.push(res.user_message);
       channelDraft.value = "";
-      // Reload messages to show the new user message
-      await refreshChannelMessages();
+      await nextTick();
+      if (channelScroller.value) channelScroller.value.scrollTop = channelScroller.value.scrollHeight;
     } catch (e) {
       console.error("send failed", e);
     }

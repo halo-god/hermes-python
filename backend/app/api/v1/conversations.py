@@ -203,11 +203,12 @@ async def send_message(
         raise HTTPException(status_code=429, detail="发送过于频繁，请稍后再试")
     metrics.MESSAGES.inc()
     user_msg, agent_msg = await svc.dispatch(
-        db, convo, payload.text, attached_file_ids=payload.attached_file_ids, owner_id=user.id
+        db, convo, payload.text, attached_file_ids=payload.attached_file_ids, owner_id=user.id,
+        skip_agent=payload.skip_agent,
     )
     return SendMessageResponse(
         user_message=MessageOut.model_validate(user_msg),
-        agent_message=MessageOut.model_validate(agent_msg),
+        agent_message=MessageOut.model_validate(agent_msg) if agent_msg else None,
     )
 
 

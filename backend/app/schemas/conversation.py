@@ -60,6 +60,7 @@ class ConversationDetail(ConversationOut):
 class SendMessageRequest(BaseModel):
     text: str = Field(min_length=1, max_length=100000)
     attached_file_ids: list[str] = Field(default_factory=list)
+    skip_agent: bool = False
 
 
 class SetAgentsRequest(BaseModel):
@@ -68,7 +69,7 @@ class SetAgentsRequest(BaseModel):
 
 class SendMessageResponse(BaseModel):
     user_message: MessageOut
-    agent_message: MessageOut
+    agent_message: MessageOut | None = None
 
 
 class WorkspaceFileOut(BaseModel):
