@@ -215,7 +215,21 @@ async def send_message(
         "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
         "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
     )
-    prompt_text = f"{_file_write_preamble}\n\n{prompt_text}"
+    _clarification_preamble = (
+        "\n\n【确认协议】当用户的请求不明确、有歧义、或你需要在多个方案中做选择时，"
+        "你必须主动向用户提问并给出明确的选项。"
+        "格式要求：\n"
+        "1. 先简短说明你理解的需求\n"
+        "2. 列出具体选项，使用编号格式（1. xxx  2. xxx  3. xxx）\n"
+        "3. 以问号结尾（？）\n"
+        "示例：\n"
+        "你想创建哪种类型的项目？\n"
+        "1. Vue 3 + FastAPI 全栈项目\n"
+        "2. 纯 Python CLI 工具\n"
+        "3. 静态网站\n\n"
+        "不要自行猜测用户意图，宁可多问一句也不要做出错误假设。"
+    )
+    prompt_text = f"{_file_write_preamble}{_clarification_preamble}\n\n{prompt_text}"
 
     await redis_core.clear_cancel(str(convo.id))
     await redis_core.enqueue_prompt(
@@ -285,7 +299,21 @@ async def send_roundtable(
         "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
         "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
     )
-    prompt_text = f"{_file_write_preamble}\n\n{prompt_text}"
+    _clarification_preamble = (
+        "\n\n【确认协议】当用户的请求不明确、有歧义、或你需要在多个方案中做选择时，"
+        "你必须主动向用户提问并给出明确的选项。"
+        "格式要求：\n"
+        "1. 先简短说明你理解的需求\n"
+        "2. 列出具体选项，使用编号格式（1. xxx  2. xxx  3. xxx）\n"
+        "3. 以问号结尾（？）\n"
+        "示例：\n"
+        "你想创建哪种类型的项目？\n"
+        "1. Vue 3 + FastAPI 全栈项目\n"
+        "2. 纯 Python CLI 工具\n"
+        "3. 静态网站\n\n"
+        "不要自行猜测用户意图，宁可多问一句也不要做出错误假设。"
+    )
+    prompt_text = f"{_file_write_preamble}{_clarification_preamble}\n\n{prompt_text}"
 
     await redis_core.clear_cancel(str(convo.id))
     await redis_core.enqueue_prompt(

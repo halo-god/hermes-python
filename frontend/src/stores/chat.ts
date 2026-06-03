@@ -306,7 +306,9 @@ export const useChatStore = defineStore("chat", () => {
   async function respondConfirmation(requestId: string, choice: string) {
     if (!activeId.value) return;
     pendingConfirmations.value = pendingConfirmations.value.filter((r) => r.id !== requestId);
-    await conversationsApi.confirm(activeId.value, requestId, choice).catch(() => {});
+    // Open SSE stream before sending the confirmation, so the agent's response is streamed back.
+    const id = activeId.value;
+    await sendSingle(id, `[用户选择了] ${choice}`);
   }
 
   async function newConversationWithProfile(profileId: string): Promise<string> {

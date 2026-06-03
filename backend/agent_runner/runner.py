@@ -81,7 +81,7 @@ class Runner:
         try:
             # Only refresh if we still own it
             current = await redis.get(LOCK_KEY)
-            if current and current.decode() == self._lock_token:
+            if current and str(current) == self._lock_token:
                 await redis.expire(LOCK_KEY, LOCK_TTL)
         except Exception:
             logger.warning("Failed to refresh runner lock")
@@ -504,6 +504,11 @@ class Runner:
             client, new_session = await self.pool.get(
                 conversation_id, agent.command, cwd, on_update, on_fs_write
             )
+            logger.info(
+                "handle_single: conv=%s msg=%s client_pid=%s new_session=%s",
+                conversation_id[:8], message_id[:8],
+                client._proc.pid if client._proc else "None", new_session,
+            )
             if new_session:
                 await self._set_session_id(conversation_id, new_session)
             stop_reason = await client.prompt(text)
@@ -524,6 +529,31 @@ class Runner:
             await self._extract_and_save_files(
                 conversation_id, message_id, agent_id, acc["text"]
             )
+
+        # ── Clarification detection: if agent response is a question with options,
+        #    inject a confirmation_request so the frontend shows a choice dialog. ──
+        if status == "complete" and acc["text"]:
+            detected = self._detect_clarification(acc["text"])
+            if detected:
+                request_id = str(uuid.uuid4())
+                question, options = detected
+                await R.publish_event(
+                    conversation_id,
+                    {
+                        "type": "confirmation_request",
+                        "message_id": message_id,
+                        "request": {
+                            "id": request_id,
+                            "conversation_id": conversation_id,
+                            "message_id": message_id,
+                            "question": question,
+                            "options": options,
+                        },
+                    },
+                )
+                # Don't await response here — the user's reply will come through
+                # the normal message flow with conversation context.
+
         await self._finalize(message_id, acc["text"], status)
         await R.clear_cancel(conversation_id)
         await R.publish_event(
@@ -536,6 +566,57 @@ class Runner:
                 "text": acc["text"],
             },
         )
+
+    # ── Clarification detection: scan for questions with options ──
+    @staticmethod
+    def _detect_clarification(text: str) -> tuple[str, list[str]] | None:
+        """Detect if the agent response is a clarification question with options.
+
+        Returns (question, options) if detected, None otherwise.
+        Heuristics:
+        - Contains numbered options (1. 2. 3.) — at least 2
+        - Or contains "还是" patterns
+        - Doesn't require trailing question mark (agent may add examples after)
+        """
+        import re
+
+        text = text.strip()
+
+        # Pattern 1: Numbered list items (1. xxx 2. xxx or 1、xxx 2、xxx)
+        numbered = re.findall(r"(?:^|\n)\s*\d+[.、)）]\s*(.+?)(?=\n|$)", text)
+        if len(numbered) >= 2:
+            # Extract the question: everything before the first numbered item
+            first_num = re.search(r"(?:^|\n)\s*\d+[.、)）]", text)
+            question = text[: first_num.start()].strip() if first_num else text
+            # Clean up options: remove trailing punctuation, markdown bold
+            options = []
+            for opt in numbered:
+                cleaned = opt.rstrip("？?。. ").strip()
+                # Remove markdown bold markers
+                cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+                # Extract just the label part (before colon/：)
+                if "：" in cleaned:
+                    cleaned = cleaned.split("：")[0].strip()
+                elif ":" in cleaned:
+                    cleaned = cleaned.split(":")[0].strip()
+                if cleaned:
+                    options.append(cleaned)
+            if len(options) >= 2:
+                return question or "请选择", options
+
+        # Pattern 2: "A还是B" or "A 或 B"
+        haisi = re.search(r"(.+?)还是(.+?)[？?]?\s*$", text)
+        if haisi:
+            opts = [haisi.group(1).strip(), haisi.group(2).strip()]
+            question = text[: haisi.start()].strip()
+            return question or "请选择", opts
+
+        # Pattern 3: Lines ending with "？" as separate options
+        q_lines = [l.strip() for l in text.split("\n") if l.strip().endswith("？")]
+        if len(q_lines) >= 2:
+            return "请选择一个选项", q_lines
+
+        return None
 
     # ── Fallback: extract files from AI text response ──
     async def _extract_and_save_files(

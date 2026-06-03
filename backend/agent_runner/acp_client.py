@@ -250,10 +250,13 @@ class ACPClient:
                 # without approval the tool is blocked. We approve if the path is
                 # inside cwd (the workspace).
                 tool_call = params.get("toolCall") or params.get("tool_call") or {}
+                logger.info("request_permission params keys=%s", list(params.keys()))
+                logger.info("toolCall keys=%s", list(tool_call.keys()) if isinstance(tool_call, dict) else type(tool_call))
+                # Try multiple extraction paths for the file path
                 raw_input = tool_call.get("rawInput") or tool_call.get("raw_input") or {}
-                args = raw_input.get("arguments") or {}
-                edit_path = args.get("path", "")
-                # Also try content locations and content fields
+                args = raw_input.get("arguments") or raw_input.get("args") or {}
+                edit_path = args.get("path") or args.get("file_path") or ""
+                # Try toolCall.content[].path, toolCall.locations[].path
                 if not edit_path:
                     for loc in (tool_call.get("locations") or []):
                         edit_path = loc.get("path") or loc.get("uri") or ""
@@ -264,6 +267,18 @@ class ACPClient:
                         edit_path = c.get("path") or ""
                         if edit_path:
                             break
+                # Try top-level params paths
+                if not edit_path:
+                    edit_path = params.get("path") or params.get("file_path") or ""
+                # Try nested input in tool_call directly
+                if not edit_path:
+                    nested = tool_call.get("input") or {}
+                    if isinstance(nested, dict):
+                        edit_path = nested.get("path") or nested.get("file_path") or ""
+                if edit_path:
+                    logger.info("Extracted edit_path=%s", edit_path)
+                else:
+                    logger.warning("Could not extract edit_path! toolCall=%s", tool_call)
                 approved = False
                 if edit_path:
                     import os
@@ -275,6 +290,8 @@ class ACPClient:
                     approved = real_edit.startswith(real_cwd + os.sep) or real_edit == real_cwd
                 if approved:
                     logger.info("Auto-approved edit: %s", edit_path)
+                else:
+                    logger.warning("Edit NOT approved. edit_path=%s cwd=%s", edit_path, self.cwd)
                 await self._respond(msg["id"], {
                     "outcome": {
                         "outcome": "selected",
