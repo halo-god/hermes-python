@@ -90,19 +90,6 @@ watch(loadMoreSentinel, (el) => {
   if (el && observer) observer.observe(el);
 });
 
-// Load team knowledge when the active conversation has a team_id
-watch(
-  () => activeConvo.value?.team_id,
-  async (tid) => {
-    if (tid) {
-      try { teamKnowledge.value = await teamsApi.listKnowledge(tid); } catch { teamKnowledge.value = []; }
-    } else {
-      teamKnowledge.value = [];
-    }
-  },
-  { immediate: true }
-);
-
 // ── Greeting: time-aware + voice-aware ──
 const greeting = computed(() => {
   const hour = new Date().getHours();
