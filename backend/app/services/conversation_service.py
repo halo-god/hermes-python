@@ -199,8 +199,8 @@ async def send_message(
             content = f.get("content", "")
             if content:
                 # Truncate very large files to avoid blowing up the prompt
-                if len(content) > 20000:
-                    content = content[:20000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
+                if len(content) > 200000:
+                    content = content[:200000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
                 parts.append(f"【附件: {f['name']}】\n```\n{content}\n```")
             else:
                 parts.append(f"【附件: {f['name']}】（文件内容为空）")
@@ -294,8 +294,8 @@ async def send_roundtable(
         for f in attached:
             content = f.get("content", "")
             if content:
-                if len(content) > 20000:
-                    content = content[:20000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
+                if len(content) > 200000:
+                    content = content[:200000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
                 parts.append(f"【附件: {f['name']}】\n```\n{content}\n```")
             else:
                 parts.append(f"【附件: {f['name']}】（文件内容为空）")

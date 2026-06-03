@@ -235,6 +235,7 @@ async function onSend(opts?: SendOptions) {
   draft.value = "";
   if (opts?.stagedFiles?.length) showWorkspace.value = true;
   // Prepend knowledge content inline
+  console.log('[onSend] knowledgeIds:', opts?.knowledgeIds, 'team_id:', activeConvo.value?.team_id, 'teamKnowledge:', teamKnowledge.value.length);
   if (opts?.knowledgeIds?.length && activeConvo.value?.team_id) {
     const tid = activeConvo.value.team_id;
     const blocks: string[] = [];
@@ -242,10 +243,14 @@ async function onSend(opts?: SendOptions) {
       try {
         const content = await teamsApi.knowledgeContent(tid, kid);
         const item = teamKnowledge.value.find((k) => k.id === kid);
+        console.log('[onSend] knowledge', kid, 'content length:', content?.length, 'name:', item?.name);
         if (content) blocks.push(`【知识库: ${item?.name || kid}】\n${content}`);
-      } catch { /* ignore */ }
+      } catch (e) { console.error('[onSend] knowledge fetch failed:', kid, e); }
     }
-    if (blocks.length) text = blocks.join("\n\n") + "\n\n" + text;
+    if (blocks.length) {
+      text = blocks.join("\n\n") + "\n\n" + text;
+      console.log('[onSend] final text length:', text.length);
+    }
   }
   await chat.send(text, landingAgentId.value, opts);
   await scrollDown();
