@@ -108,11 +108,26 @@ async def get_conversation(
     db: AsyncSession = Depends(get_db),
 ):
     convo = await _require_convo(db, conversation_id, user)
-    msgs = await svc.get_messages(db, convo.id)
+    # Initial load: last 50 messages
+    msgs = await svc.get_messages(db, convo.id, limit=50)
     return ConversationDetail(
         **ConversationOut.model_validate(convo).model_dump(),
         messages=[MessageOut.model_validate(m) for m in msgs],
     )
+
+
+@router.get("/{conversation_id}/messages", response_model=list[MessageOut])
+async def get_messages_page(
+    conversation_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    before: uuid.UUID | None = Query(None, description="Cursor: message ID to fetch before"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Paginated message fetch. Use *before* cursor for infinite scroll (load older)."""
+    await _require_convo(db, conversation_id, user)
+    msgs = await svc.get_messages(db, conversation_id, limit=limit, before_id=before)
+    return [MessageOut.model_validate(m) for m in msgs]
 
 
 @router.patch("/{conversation_id}", response_model=ConversationOut)
@@ -323,7 +338,7 @@ async def conversation_ws(
                     async with async_session_maker() as db2:
                         c = await svc.get_conversation(db2, conversation_id, user.id)
                         if c:
-                            await svc.dispatch(db2, c, text, attached_file_ids=file_ids)
+                            await svc.dispatch(db2, c, text, attached_file_ids=file_ids, owner_id=user.id)
             elif action == "cancel":
                 await redis_core.request_cancel(str(conversation_id))
     except WebSocketDisconnect:
@@ -413,10 +428,14 @@ async def get_file_raw(
     else:
         raise HTTPException(status_code=404, detail="文件内容不存在")
 
+    from urllib.parse import quote
+    ascii_name = f.name.encode("ascii", "ignore").decode() or "file"
     return Response(
         content=data,
         media_type=mime,
-        headers={"Content-Disposition": f'inline; filename="{f.name}"'},
+        headers={
+            "Content-Disposition": f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(f.name)}"
+        },
     )
 
 
@@ -489,7 +508,8 @@ async def upload_file(
 ):
     convo = await _require_convo(db, conversation_id, user)
     raw = await file.read()
-    name = file.filename or "upload"
+    import re as _re
+    name = _re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", file.filename or "upload").strip("_. ") or "upload"
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else "bin"
     TEXT_EXTS = {"md", "txt", "json", "csv", "html", "htm", "js", "ts", "py", "go", "rs",
                  "yaml", "yml", "toml", "sh", "bash", "log", "xml", "css", "diff", "patch"}

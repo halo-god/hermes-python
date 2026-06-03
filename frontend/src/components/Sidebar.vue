@@ -3,6 +3,7 @@
    all main screens. Wired to the real chat store + teams + router. */
 import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import Icon from "@/components/Icon.vue";
 import ConfirmModal from "@/components/ConfirmModal.vue";
 import NewTeamModal from "@/components/NewTeamModal.vue";
@@ -10,6 +11,7 @@ import NewConversationModal from "@/components/NewConversationModal.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import { useNotificationStore } from "@/stores/notifications";
+import { useTheme } from "@/composables/useTheme";
 import { conversationsApi } from "@/api/conversations";
 
 const auth = useAuthStore();
@@ -17,6 +19,8 @@ const chat = useChatStore();
 const ns = useNotificationStore();
 const router = useRouter();
 const route = useRoute();
+const { theme, toggleTheme } = useTheme();
+const { t } = useI18n();
 const showNewTeam = ref(false);
 const showNewConvo = ref(false);
 
@@ -113,28 +117,34 @@ async function shareConvo(id: string) {
 
       <div class="side-section" style="margin-top: 4px">
         <div class="side-row" :class="{ active: onChat && !chat.activeId }" @click="newChat">
-          <Icon name="plus" class="ico" /> 新会话
+          <Icon name="plus" class="ico" /> {{ t('nav.newChat') }}
           <span class="kbd">⌘N</span>
         </div>
         <div class="side-row" :class="{ active: route.name === 'history' }" @click="router.push('/history')" style="margin-top: -2px">
-          <Icon name="list" class="ico" /> 所有会话
+          <Icon name="list" class="ico" /> {{ t('nav.allChats') }}
           <span class="badge">{{ chat.conversations.length }}</span>
         </div>
       </div>
 
       <div class="side-section">
         <div class="side-row" @click="openSearch">
-          <Icon name="search" class="ico" /> 搜索
+          <Icon name="search" class="ico" /> {{ t('nav.search') }}
           <span class="kbd">⌘K</span>
         </div>
         <div class="side-row" :class="{ active: route.name === 'schedule' }" @click="router.push('/schedule')">
-          <Icon name="clock" class="ico" /> 定时任务
+          <Icon name="clock" class="ico" /> {{ t('nav.schedule') }}
+        </div>
+        <div class="side-row" :class="{ active: route.name === 'files' }" @click="router.push('/files')">
+          <Icon name="folder" class="ico" /> {{ t('nav.files') }}
+        </div>
+        <div v-if="isAdmin" class="side-row" :class="{ active: route.name === 'terminal' }" @click="router.push('/terminal')">
+          <Icon name="sparkle" class="ico" /> {{ t('nav.terminal') }}
         </div>
       </div>
 
       <div class="side-label">
-        团队
-        <button title="新建团队" @click="showNewTeam = true">+</button>
+        {{ t('nav.teams') }}
+        <button :title="t('nav.newTeam')" @click="showNewTeam = true">+</button>
       </div>
       <div class="side-section" style="padding-top: 0">
         <div
@@ -150,7 +160,7 @@ async function shareConvo(id: string) {
         <div v-if="!chat.teams.length" style="padding: 4px 12px; font-size: 12px; color: var(--ink-mute)">还没有团队</div>
       </div>
 
-      <div class="side-label">对话</div>
+      <div class="side-label">{{ t('nav.conversations') }}</div>
       <div class="convo-list">
         <div
           v-for="c in chat.conversations"
@@ -179,19 +189,23 @@ async function shareConvo(id: string) {
       </div>
 
       <div class="side-foot" v-if="auth.user">
+        <div class="side-row" @click="toggleTheme" :title="theme === 'dark' ? t('nav.lightMode') : t('nav.darkMode')">
+          <Icon :name="theme === 'dark' ? 'sun' : 'moon'" class="ico" />
+          {{ theme === 'dark' ? t('nav.lightMode') : t('nav.darkMode') }}
+        </div>
         <div v-if="isAdmin" class="side-row" :class="{ active: route.name === 'admin' }" @click="router.push('/admin')">
-          <Icon name="settings" class="ico" /> 后台管理
+          <Icon name="settings" class="ico" /> {{ t('nav.admin') }}
           <span class="badge" style="background: var(--accent-tint); color: var(--accent-deep); font-weight: 600">ADMIN</span>
         </div>
         <div class="side-row" :class="{ active: route.name === 'settings' }" @click="router.push('/settings')">
-          <Icon name="user" class="ico" /> 个人设置
+          <Icon name="user" class="ico" /> {{ t('nav.settings') }}
         </div>
-        <div class="side-row" :class="{ active: route.name === 'settings' }" @click="router.push('/settings')" title="个人资料与账号设置">
+        <div class="side-row" :class="{ active: route.name === 'settings' }" @click="router.push('/settings')" :title="t('nav.settings')">
           <div class="mem-avatar" :style="{ background: auth.user.color || '#b8852a', width: '20px', height: '20px', fontSize: '10px', marginLeft: '-2px', marginRight: '-2px' }">
             {{ auth.user.initials || auth.user.name.slice(0, 1) }}
           </div>
           {{ auth.user.name }}
-          <button class="side-logout" title="退出登录" @click.stop="onLogout"><Icon name="logout" /></button>
+          <button class="side-logout" :title="t('nav.logout')" @click.stop="onLogout"><Icon name="logout" /></button>
         </div>
       </div>
     </div>

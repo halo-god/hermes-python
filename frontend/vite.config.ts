@@ -9,6 +9,26 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-vue": ["vue", "vue-router", "pinia", "axios"],
+          "vendor-naive": ["naive-ui"],
+          "vendor-mermaid": ["mermaid"],
+          "vendor-katex": ["katex", "@vscode/markdown-it-katex"],
+          "vendor-hljs": ["highlight.js"],
+          "vendor-virtual": ["@tanstack/vue-virtual"],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
   server: {
     host: true,
     port: 5173,

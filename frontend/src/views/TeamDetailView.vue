@@ -43,6 +43,10 @@ function agentInfo(id: string): Agent {
   return chat.agents.find((a) => a.id === id) || ({ id, label: id, color: "#b8852a", icon: "sparkle", description: "" } as Agent);
 }
 
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
 const detail = ref<TeamDetail | null>(null);
 const projects = ref<Project[]>([]);
 const policy = ref<TeamPolicy | null>(null);
@@ -196,15 +200,16 @@ async function refreshChannelMessages() {
   } catch { /* ignore */ }
 }
 
-function applyChannelEvent(ev: { type: string; delta?: string; text?: string }) {
-  if (!channelMessages.value.length) return;
-  const last = channelMessages.value[channelMessages.value.length - 1];
-  if (last.role !== "agent" && last.role !== "roundtable") return;
+function applyChannelEvent(ev: { type: string; message_id?: string; delta?: string; text?: string }) {
+  const target = ev.message_id
+    ? channelMessages.value.find((m) => m.id === ev.message_id)
+    : channelMessages.value[channelMessages.value.length - 1];
+  if (!target || (target.role !== "agent" && target.role !== "roundtable")) return;
   if (ev.type === "token" && ev.delta) {
-    last.content = { ...last.content, text: (last.content.text || "") + ev.delta };
-  } else if (ev.type === "done" && ev.text !== undefined) {
-    last.content = { ...last.content, text: ev.text };
-    last.status = "complete";
+    target.content = { ...target.content, text: (target.content.text || "") + ev.delta };
+  } else if (ev.type === "done") {
+    if (ev.text !== undefined) target.content = { ...target.content, text: ev.text };
+    target.status = "complete";
   }
 }
 
@@ -816,7 +821,10 @@ async function deleteTeam() {
             <template v-for="m in channelMessages" :key="m.id">
               <!-- User message row -->
               <div v-if="m.role === 'user'" class="ch-row user" style="align-items:flex-end;gap:8px">
-                <div class="ch-bubble" v-html="renderMarkdown(m.content.text || '')"></div>
+                <div>
+                  <div class="ch-bubble" v-html="renderMarkdown(m.content.text || '')"></div>
+                  <div class="ch-time">{{ fmtTime(m.created_at) }}</div>
+                </div>
                 <div class="ch-av"
                   :style="{ background: channelMemberInfo(m.owner_id)?.color || 'var(--accent)' }"
                   :title="channelMemberInfo(m.owner_id)?.name || '成员'"
@@ -833,7 +841,10 @@ async function deleteTeam() {
                   <Icon :name="agentInfo(m.agent_id || 'hermes').icon || 'sparkle'" :size="16"
                     :style="{ color: agentInfo(m.agent_id || 'hermes').color || '#b8852a' }" />
                 </div>
-                <div class="ch-bubble" v-html="m.content.markdown || renderMarkdown(m.content.text || '') || '…'"></div>
+                <div>
+                  <div class="ch-bubble" v-html="m.content.markdown || renderMarkdown(m.content.text || '') || '…'"></div>
+                  <div class="ch-time">{{ fmtTime(m.created_at) }}</div>
+                </div>
               </div>
             </template>
           </div>

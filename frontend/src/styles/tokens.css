@@ -3,10 +3,13 @@
   --bg-canvas: #f6f4ee;
   --bg-side: #efece3;
   --bg-panel: #ffffff;
+  --bg-card: #fffdf8;
+  --bg-hover: rgba(0,0,0,0.04);
   --ink: #1d1a14;
   --ink-soft: #4b463c;
   --ink-mute: #8a8474;
   --ink-faint: #c6c0b1;
+  --ink-on-accent: #fffdf8;
   --rule: #e5e0d2;
   --rule-soft: #ece8db;
   --accent: #b8852a;
@@ -26,6 +29,19 @@
   --font-sans: "Inter", "Noto Sans SC", system-ui, -apple-system, sans-serif;
   --font-serif: "Cormorant Garamond", "Noto Sans SC", serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* Dark mode variables — see prototype.css body.dark for the full set.
+   These provide additional tokens not in the original prototype. */
+[data-theme="dark"] {
+  --bg-card: #252525;
+  --bg-hover: rgba(255,255,255,0.06);
+  --ink-on-accent: #111111;
+  --danger: #e05a48;
+  --ok: #5a9a48;
+  --shadow-sm: 0 1px 0 rgba(0,0,0,0.2), 0 1px 3px rgba(0,0,0,0.15);
+  --shadow-md: 0 1px 2px rgba(0,0,0,0.2), 0 8px 24px -8px rgba(0,0,0,0.4);
+  --shadow-lg: 0 2px 4px rgba(0,0,0,0.2), 0 20px 48px -16px rgba(0,0,0,0.5);
 }
 
 * {

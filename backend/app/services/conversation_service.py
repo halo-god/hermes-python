@@ -24,7 +24,8 @@ async def list_conversations(
     if pinned_only:
         stmt = stmt.where(Conversation.pinned.is_(True))
     if q:
-        stmt = stmt.where(func.lower(Conversation.title).like(f"%{q.lower()}%"))
+        escaped = q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(func.lower(Conversation.title).like(f"%{escaped}%", escape="\\"))
     stmt = stmt.order_by(Conversation.pinned.desc(), Conversation.updated_at.desc())
     return list((await db.execute(stmt)).scalars().all())
 
@@ -56,13 +57,34 @@ async def get_conversation(
     return res.scalar_one_or_none()
 
 
-async def get_messages(db: AsyncSession, conversation_id: uuid.UUID) -> list[Message]:
-    res = await db.execute(
+async def get_messages(
+    db: AsyncSession,
+    conversation_id: uuid.UUID,
+    limit: int | None = None,
+    before_id: uuid.UUID | None = None,
+) -> list[Message]:
+    """Fetch messages, optionally paginated.
+
+    When *limit* is given, returns only the most recent *limit* messages.
+    *before_id* (cursor) fetches messages older than the given message id.
+    """
+    stmt = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at)
     )
-    return list(res.scalars().all())
+    if before_id:
+        # Sub-select to get the cursor timestamp
+        cursor_ts = (
+            select(Message.created_at)
+            .where(Message.id == before_id)
+            .scalar_subquery()
+        )
+        stmt = stmt.where(Message.created_at < cursor_ts)
+    stmt = stmt.order_by(Message.created_at.desc(), Message.role.asc())
+    if limit:
+        stmt = stmt.limit(limit)
+    res = await db.execute(stmt)
+    return list(reversed(res.scalars().all()))
 
 
 async def create_conversation(

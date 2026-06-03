@@ -7,18 +7,36 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@tanstack/vue-virtual": "^3.13.28",
+    "@vicons/ionicons5": "^0.13.0",
+    "@vscode/markdown-it-katex": "^1.1.2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "axios": "^1.7.2",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.17.0",
+    "markdown-it": "^14.2.0",
+    "mermaid": "^11.15.0",
+    "naive-ui": "^2.44.1",
     "pinia": "^2.1.7",
     "vue": "^3.4.38",
+    "vue-i18n": "^9.14.5",
     "vue-router": "^4.4.0"
   },
   "devDependencies": {
+    "@types/katex": "^0.16.8",
+    "@types/markdown-it": "^14.1.2",
     "@vitejs/plugin-vue": "^5.1.0",
+    "@vue/test-utils": "^2.4.10",
+    "jsdom": "^29.1.1",
     "typescript": "^5.5.3",
     "vite": "^5.4.0",
+    "vitest": "^4.1.8",
     "vue-tsc": "^2.0.29"
   }
 }

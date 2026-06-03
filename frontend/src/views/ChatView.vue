@@ -2,21 +2,24 @@
 /* 1:1 port of the prototype chat (hermes-app.js landing + thread), main-content
    only — the sidebar/topbar live in AppLayout. Uses the prototype CSS classes
    so it renders pixel-identical; wired to the real chat store. */
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useVirtualizer } from "@tanstack/vue-virtual";
 import Icon from "@/components/Icon.vue";
 import Composer from "@/components/Composer.vue";
 import ConfirmModal from "@/components/ConfirmModal.vue";
 import ConvoSeal from "@/components/ConvoSeal.vue";
-import WorkspacePanel from "@/components/WorkspacePanel.vue";
-import ExtractItemsModal from "@/components/ExtractItemsModal.vue";
 import { useChatStore } from "@/stores/chat";
 import { useNotificationStore } from "@/stores/notifications";
 import { conversationsApi } from "@/api/conversations";
 import { teamsApi } from "@/api/teams";
-import { renderMarkdown } from "@/utils/markdown";
+import { renderMarkdown, renderMarkdownAsync } from "@/utils/markdown";
 import type { Agent, Knowledge, WsAdapter } from "@/types";
 import type { SendOptions } from "@/components/Composer.vue";
+
+// Lazy-load heavy components (split from main bundle)
+const WorkspacePanel = defineAsyncComponent(() => import("@/components/WorkspacePanel.vue"));
+const ExtractItemsModal = defineAsyncComponent(() => import("@/components/ExtractItemsModal.vue"));
 
 const chat = useChatStore();
 const ns = useNotificationStore();
@@ -25,6 +28,7 @@ const router = useRouter();
 
 const draft = ref("");
 const scroller = ref<HTMLElement | null>(null);
+const loadMoreSentinel = ref<HTMLElement | null>(null);
 const showWorkspace = ref(false);
 const showAgentMenu = ref(false);
 const showExtractModal = ref(false);
@@ -58,6 +62,32 @@ onMounted(async () => {
     if (seed) draft.value = seed;
     await scrollDown();
   }
+  // Observe load-more sentinel for infinite scroll
+  setupLoadMoreObserver();
+});
+
+// ── Infinite scroll: load older messages when sentinel is visible ──
+let observer: IntersectionObserver | null = null;
+function setupLoadMoreObserver() {
+  observer = new IntersectionObserver(
+    async (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && chat.hasMoreMessages && !chat.loadingOlder && chat.activeId) {
+          const el = scroller.value;
+          const prevHeight = el?.scrollHeight || 0;
+          await chat.loadMoreMessages();
+          // Preserve scroll position after prepending
+          await nextTick();
+          if (el) el.scrollTop = el.scrollHeight - prevHeight;
+        }
+      }
+    },
+    { root: scroller.value, threshold: 0.1 }
+  );
+  if (loadMoreSentinel.value) observer.observe(loadMoreSentinel.value);
+}
+watch(loadMoreSentinel, (el) => {
+  if (el && observer) observer.observe(el);
 });
 
 // Load team knowledge when the active conversation has a team_id
@@ -96,6 +126,19 @@ const landingAgent = computed(() => agentById(landingAgentId.value) || hermes.va
 const activeConvo = computed(() => chat.conversations.find((c) => c.id === chat.activeId));
 const primaryAgent = computed(() => agentById(activeConvo.value?.primary_agent_id || "hermes") || hermes.value);
 
+// Load team knowledge when the active conversation has a team_id
+watch(
+  () => activeConvo.value?.team_id,
+  async (tid) => {
+    if (tid) {
+      try { teamKnowledge.value = await teamsApi.listKnowledge(tid); } catch { teamKnowledge.value = []; }
+    } else {
+      teamKnowledge.value = [];
+    }
+  },
+  { immediate: true }
+);
+
 // ── Team / project context tags in thread meta ──
 const convoTeamName = computed(() => {
   const tid = activeConvo.value?.team_id;
@@ -121,6 +164,24 @@ function md(text: string) {
   return renderMarkdown(text);
 }
 
+// Post-process Mermaid blocks after DOM updates
+watch(() => chat.messages.length, async () => {
+  await nextTick();
+  const blocks = document.querySelectorAll('.md-body pre code.language-mermaid');
+  for (const block of blocks) {
+    const pre = block.parentElement;
+    if (!pre || pre.dataset.mermaidDone) continue;
+    pre.dataset.mermaidDone = '1';
+    const code = block.textContent || '';
+    try {
+      const html = await renderMarkdownAsync(`\`\`\`mermaid\n${code}\n\`\`\``);
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = html;
+      pre.replaceWith(wrapper.firstElementChild!);
+    } catch { /* leave as code block */ }
+  }
+});
+
 // Profiles available to add to the roundtable (each maps to a unique agent).
 const availableToAdd = computed(() => {
   const activeProfileAgentIds = new Set(chat.activeAgents);
@@ -142,11 +203,48 @@ async function scrollDown() {
 watch(() => chat.messages.map((m) => m.content.text).join("|"), scrollDown);
 watch(() => chat.activeId, scrollDown);
 
+// ── Virtual scroll for message list ──
+const virtualizerContainer = ref<HTMLElement | null>(null);
+
+const virtualizer = useVirtualizer({
+  count: chat.messages.length,
+  getScrollElement: () => scroller.value,
+  estimateSize: () => 120, // default estimate for a message
+  overscan: 5,
+  getItemKey: (index) => chat.messages[index]?.id ?? index,
+});
+
+// Update virtualizer count when messages change
+watch(() => chat.messages.length, (newCount) => {
+  virtualizer.value.options.count = newCount;
+  // Auto-scroll to bottom for new messages
+  nextTick(() => {
+    virtualizer.value.scrollToIndex(newCount - 1, { align: "end" });
+  });
+});
+
+// Measure actual element height for variable-height messages
+function onMeasure(el: HTMLElement, _index: number) {
+  if (el) {
+    virtualizer.value.measureElement(el);
+  }
+}
+
 const openFileId = ref<string | null>(null);
+
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Auto-reveal workspace when AI creates files during streaming
+watch(() => chat.files.length, (newLen, oldLen) => {
+  if (newLen > oldLen && chat.streaming) showWorkspace.value = true;
+});
 
 async function onSend(opts?: SendOptions) {
   let text = draft.value.trim();
-  if (!text || chat.streaming) return;
+  if (!text) return;
+  if (chat.isActivelyStreaming(chat.activeId || "")) return;
   draft.value = "";
   if (opts?.stagedFiles?.length) showWorkspace.value = true;
   // Prepend knowledge content inline
@@ -237,9 +335,10 @@ const wsAdapter = computed<WsAdapter>(() => {
           v-model="draft"
           :placeholder="`给 ${landingAgent?.label || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
           :agent="{ label: landingAgent?.label, color: landingAgent?.color, model: landingAgent?.version || 'ACP' }"
-          :streaming="chat.streaming"
+          :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
+          @cancel="chat.cancel()"
         />
 
         <!-- agents grid -->
@@ -318,12 +417,27 @@ const wsAdapter = computed<WsAdapter>(() => {
             </div>
           </div>
 
-          <!-- messages -->
-          <template v-for="m in chat.messages" :key="m.id">
-            <!-- roundtable -->
-            <div v-if="m.role === 'roundtable'" class="roundtable">
-              <div class="roundtable-label">圆桌 · {{ m.content.replies?.length || 0 }} 位助手并行作答</div>
-              <div v-for="(r, idx) in m.content.replies" :key="idx" class="rt-card">
+          <!-- messages (virtual scroll) -->
+          <div v-if="chat.hasMoreMessages || chat.loadingOlder" ref="loadMoreSentinel" class="load-more-sentinel">
+            <span v-if="chat.loadingOlder" class="loading-spinner"></span>
+            <span v-else class="load-more-hint">↑ 上滑加载更多消息</span>
+          </div>
+          <div
+            ref="virtualizerContainer"
+            :style="{ height: virtualizer.getTotalSize() + 'px', width: '100%', position: 'relative' }"
+          >
+            <div
+              v-for="row in virtualizer.getVirtualItems()"
+              :key="String(row.key)"
+              :ref="(el) => onMeasure(el as HTMLElement, row.index)"
+              :data-index="row.index"
+              :style="{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${row.start}px)` }"
+            >
+              <template v-if="chat.messages[row.index]">
+                <!-- roundtable -->
+                <div v-if="chat.messages[row.index].role === 'roundtable'" class="roundtable">
+              <div class="roundtable-label">圆桌 · {{ chat.messages[row.index].content.replies?.length || 0 }} 位助手并行作答</div>
+              <div v-for="(r, idx) in chat.messages[row.index].content.replies" :key="idx" class="rt-card">
                 <div class="rt-card-head">
                   <span class="rt-avatar" :style="{ background: agentDisplay(r.agent_id).color }"><Icon :name="agentDisplay(r.agent_id).icon" :size="11" /></span>
                   <span class="rt-name">{{ agentDisplay(r.agent_id).label }}</span>
@@ -335,7 +449,7 @@ const wsAdapter = computed<WsAdapter>(() => {
                 </div>
                 <!-- vote buttons -->
                 <div v-if="r.status !== 'streaming'" class="rt-vote">
-                  <button :class="{ chosen: isChosen(m.id, idx) }" @click="toggleChosen(m.id, idx)">
+                  <button :class="{ chosen: isChosen(chat.messages[row.index].id, idx) }" @click="toggleChosen(chat.messages[row.index].id, idx)">
                     <Icon name="check" :size="10" /> 采纳
                   </button>
                   <button @click="followUp(r.agent_id)">
@@ -346,45 +460,56 @@ const wsAdapter = computed<WsAdapter>(() => {
                   </button>
                 </div>
               </div>
-              <div v-if="m.content.merged && (m.content.merged.text || m.content.merged.status !== 'pending')" class="rt-merge">
+              <div v-if="chat.messages[row.index]?.content?.merged && (chat.messages[row.index]?.content?.merged?.text || chat.messages[row.index]?.content?.merged?.status !== 'pending')" class="rt-merge">
                 <div class="rt-merge-head"><Icon name="sparkle" :size="12" /> Hermes 综合各方观点</div>
-                <span v-if="m.content.merged.status === 'streaming' && !m.content.merged.text" class="typing"><span></span><span></span><span></span></span>
-                <div v-else class="md-body" v-html="md(m.content.merged.text)" />
+                <span v-if="chat.messages[row.index].content.merged?.status === 'streaming' && !chat.messages[row.index].content.merged?.text" class="typing"><span></span><span></span><span></span></span>
+                <div v-else class="md-body" v-html="md(chat.messages[row.index].content.merged?.text || '')" />
               </div>
             </div>
 
             <!-- normal message -->
-            <div v-else class="msg" :class="m.role">
-              <div v-if="m.role === 'agent'" class="msg-avatar" :style="{ background: agentById(m.agent_id || 'hermes')?.color || '#b8852a' }">
-                <Icon :name="agentById(m.agent_id || 'hermes')?.icon || 'brand'" :size="14" />
+            <div v-else class="msg" :class="chat.messages[row.index].role">
+              <div v-if="chat.messages[row.index].role === 'agent'" class="msg-avatar" :style="{ background: agentById(chat.messages[row.index].agent_id || 'hermes')?.color || '#b8852a' }">
+                <Icon :name="agentById(chat.messages[row.index].agent_id || 'hermes')?.icon || 'brand'" :size="14" />
               </div>
               <div class="msg-body">
-                <div v-if="m.role === 'agent'" class="msg-name">
-                  {{ agentById(m.agent_id || 'hermes')?.label || "Hermes" }}
-                  <span v-if="agentById(m.agent_id || 'hermes')?.official" class="official">OFFICIAL</span>
+                <div v-if="chat.messages[row.index].role === 'agent'" class="msg-name">
+                  {{ agentById(chat.messages[row.index].agent_id || 'hermes')?.label || "Hermes" }}
+                  <span v-if="agentById(chat.messages[row.index].agent_id || 'hermes')?.official" class="official">OFFICIAL</span>
                 </div>
+                <details v-if="chat.messages[row.index].steps?.length" class="msg-steps" style="margin-bottom:6px">
+                  <summary style="font-size:11.5px;color:var(--ink-mute);cursor:pointer;list-style:none">
+                    <Icon name="bolt" :size="11" /> 执行了 {{ chat.messages[row.index].steps!.length }} 步
+                  </summary>
+                  <div v-for="(s, i) in chat.messages[row.index].steps" :key="i" class="step-item">
+                    <span class="step-dot" :class="s.status"></span>{{ s.title }}
+                  </div>
+                </details>
                 <div class="msg-bubble">
-                  <span v-if="m.status === 'streaming' && !m.content.text" class="typing"><span></span><span></span><span></span></span>
-                  <div v-else-if="m.role === 'agent'" class="md-body" v-html="md(m.content.text)" />
+                  <span v-if="chat.messages[row.index].status === 'streaming' && !chat.messages[row.index].content.text" class="typing"><span></span><span></span><span></span></span>
+                  <div v-else-if="chat.messages[row.index].role === 'agent'" class="md-body" v-html="md(chat.messages[row.index].content.text)" />
                   <template v-else>
-                    {{ m.content.text }}
-                    <div v-if="m.content.files?.length" class="msg-files">
-                      <button v-for="f in m.content.files" :key="f.id" class="msg-file-chip" @click="openFile(f.id)">
+                    {{ chat.messages[row.index].content.text }}
+                    <div v-if="chat.messages[row.index].content.files?.length" class="msg-files">
+                      <button v-for="f in chat.messages[row.index].content.files" :key="f.id" class="msg-file-chip" @click="openFile(f.id)">
                         <Icon name="paperclip" :size="11" /> {{ f.name }}
                       </button>
                     </div>
                   </template>
                 </div>
-                <div v-if="m.role === 'agent' && m.status !== 'streaming'" class="msg-tools">
-                  <button title="复制" @click="copyMessage(m.content.text)"><Icon name="copy" :size="12" /></button>
+                <div v-if="chat.messages[row.index].role === 'agent' && chat.messages[row.index].status !== 'streaming'" class="msg-tools">
+                  <button title="复制" @click="copyMessage(chat.messages[row.index].content.text)"><Icon name="copy" :size="12" /></button>
                   <button title="重新生成"><Icon name="refresh" :size="12" /></button>
                   <button title="点赞"><Icon name="thumbs_up" :size="12" /></button>
-                  <button title="分享" @click="shareMessage(m.conversation_id)"><Icon name="share" :size="12" /></button>
+                  <button title="分享" @click="shareMessage(chat.messages[row.index].conversation_id)"><Icon name="share" :size="12" /></button>
                 </div>
+                <div class="msg-time">{{ fmtTime(chat.messages[row.index].created_at) }}</div>
               </div>
-              <div v-if="m.role === 'user'" class="msg-avatar"><Icon name="user" :size="14" /></div>
+              <div v-if="chat.messages[row.index].role === 'user'" class="msg-avatar"><Icon name="user" :size="14" /></div>
             </div>
-          </template>
+              </template>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -393,10 +518,11 @@ const wsAdapter = computed<WsAdapter>(() => {
           v-model="draft"
           placeholder="继续对话…"
           :agent="{ label: primaryAgent?.label, color: primaryAgent?.color, model: primaryAgent?.version || 'ACP' }"
-          :streaming="chat.streaming"
+          :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :conversation-id="chat.activeId || undefined"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
+          @cancel="chat.cancel()"
         />
       </div>
 

@@ -68,7 +68,13 @@ function fileMode(f: FileItem | null): string {
 // ── Renderers ──
 const mdHtml = computed(() => {
   const src = previewVersion.value?.content ?? content.value;
-  return renderMarkdown(src);
+  try {
+    return renderMarkdown(src);
+  } catch (e) {
+    console.error("[WorkspacePanel] markdown render failed:", e);
+    // Fallback: escaped plain text so the panel still shows content
+    return `<pre style="white-space:pre-wrap;color:var(--ink-mute)">${src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre>`;
+  }
 });
 const jsonPretty = computed(() => {
   const src = previewVersion.value?.content ?? content.value;

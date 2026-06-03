@@ -29,7 +29,6 @@ function apply() {
 }
 watch(tweaks, apply, { deep: true });
 
-const atmosHint: Record<string, string> = { letter: "温润的纸面", cinnabar: "一点朱砂红", celadon: "雨过天青色", night: "静谧的深夜", ink: "幽蓝的墨色" };
 const densityHint: Record<string, string> = { loose: "从容铺开", normal: "正合适", tight: "不浪费每一寸" };
 const voiceHint: Record<string, string> = { classical: "简练有古意", warm: "像同事在说话", engineering: "只说事实" };
 </script>
@@ -39,17 +38,6 @@ const voiceHint: Record<string, string> = { classical: "简练有古意", warm: 
     <div class="twk-head">
       <div class="twk-title">调整 · <em style="font-style: italic; color: var(--accent-deep)">Tweaks</em></div>
       <button class="twk-close" @click="$emit('close')"><Icon name="close" /></button>
-    </div>
-
-    <div class="twk-section">
-      <div class="twk-section-label"><span>氣質 · Atmosphere</span><span class="twk-hint">{{ atmosHint[tweaks.atmos] }}</span></div>
-      <div class="twk-presets twk-presets-atmos">
-        <button class="twk-preset" :class="{ active: tweaks.atmos === 'letter' }" @click="tweaks.atmos = 'letter'"><div class="swatch letter">信</div>信札</button>
-        <button class="twk-preset" :class="{ active: tweaks.atmos === 'cinnabar' }" @click="tweaks.atmos = 'cinnabar'"><div class="swatch cinnabar">朱</div>朱砂</button>
-        <button class="twk-preset" :class="{ active: tweaks.atmos === 'celadon' }" @click="tweaks.atmos = 'celadon'"><div class="swatch celadon">青</div>青瓷</button>
-        <button class="twk-preset" :class="{ active: tweaks.atmos === 'night' }" @click="tweaks.atmos = 'night'"><div class="swatch night">夜</div>夜航</button>
-        <button class="twk-preset" :class="{ active: tweaks.atmos === 'ink' }" @click="tweaks.atmos = 'ink'"><div class="swatch ink">墨</div>墨黛</button>
-      </div>
     </div>
 
     <div class="twk-section">

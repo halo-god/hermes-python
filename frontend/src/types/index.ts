@@ -152,6 +152,7 @@ export interface Message {
   content: MessageContent & Partial<RoundtableContent>;
   status: "streaming" | "complete" | "cancelled" | "error";
   created_at: string;
+  steps?: { title: string; status: string }[];
 }
 
 export interface Conversation {
@@ -236,7 +237,7 @@ export type StreamEvent =
   | { type: "token"; message_id: string; delta: string }
   | { type: "tool_call"; message_id: string; title?: string; status?: string }
   | { type: "file"; message_id: string; file_id: string; name: string; kind: string; version: number }
-  | { type: "done"; message_id: string; status: string; stop_reason?: string }
+  | { type: "done"; message_id: string; status: string; stop_reason?: string; text?: string }
   | { type: "error"; message_id: string; detail: string }
   | { type: "rt_start"; message_id: string; agents: RtAgentMeta[] }
   | { type: "rt_token"; message_id: string; slot: number; delta: string }

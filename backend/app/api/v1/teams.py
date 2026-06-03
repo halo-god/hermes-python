@@ -457,10 +457,14 @@ async def get_knowledge_raw(
         except Exception:
             data = k.content.encode("utf-8")
 
+    from urllib.parse import quote
     safe_name = k.name.replace('"', "_").replace("\\", "_")
+    ascii_name = safe_name.encode("ascii", "ignore").decode() or "file"
     return Response(
         content=data, media_type=mime,
-        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        headers={
+            "Content-Disposition": f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
+        },
     )
 
 
@@ -474,7 +478,8 @@ async def upload_knowledge(
     from app.db.models.team import TeamKnowledge
     await svc.require_permission(db, team_id, user.id, "knowledge.upload")
     raw = await file.read()
-    name = file.filename or "upload"
+    import re as _re
+    name = _re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", file.filename or "upload").strip("_. ") or "upload"
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else "bin"
     TEXT_EXTS = {"md", "txt", "json", "csv", "html", "htm", "js", "ts", "py", "go", "rs",
                  "yaml", "yml", "toml", "sh", "log", "xml", "css", "diff", "patch"}

@@ -48,11 +48,22 @@ def _msg_chunk(session_id: str, text: str) -> None:
 
 
 def _handle_prompt(session_id: str, params: dict, req_id, persona: dict, emit_file: bool) -> None:
+    import uuid as _uuid
     prompt_text = ""
     for part in params.get("prompt", []):
         if part.get("type") == "text":
             prompt_text += part.get("text", "")
     prompt_text = prompt_text.strip()
+
+    # Emit confirmation_request for very short or question messages to demo the flow
+    if len(prompt_text) < 15 or prompt_text.endswith("?") or prompt_text.endswith("？"):
+        _update(session_id, {
+            "sessionUpdate": "confirmation_request",
+            "request_id": str(_uuid.uuid4()),
+            "question": f"你想了解「{prompt_text or '...'}」？请确认操作方向：",
+            "options": ["继续回答", "重新提问", "跳过"],
+        })
+        time.sleep(0.1)
 
     chunks = [
         persona["lead"], "围绕「", prompt_text or "你的请求", "」，\n\n",

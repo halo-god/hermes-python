@@ -93,4 +93,7 @@ export const conversationsApi = {
   async extractItems(id: string): Promise<{ project_name: string; tasks: string[]; conversation_id: string; team_id: string | null }> {
     return (await http.post(`/conversations/${id}/extract-items`)).data;
   },
+  async getMessages(id: string, params?: { limit?: number; before?: string }): Promise<Message[]> {
+    return (await http.get<Message[]>(`/conversations/${id}/messages`, { params: params || {} })).data;
+  },
 };
