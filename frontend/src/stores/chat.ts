@@ -69,10 +69,24 @@ export const useChatStore = defineStore("chat", () => {
     hasMoreMessages.value = true;
     try {
       const detail = await conversationsApi.get(id);
-      messages.value = detail.messages;
+      // Map content.tool_calls to steps for persisted messages
+      messages.value = detail.messages.map((m: Message) => ({
+        ...m,
+        steps: m.content?.tool_calls as { title: string; status: string }[] | undefined,
+      }));
       hasMoreMessages.value = detail.messages.length >= 50;
       activeAgents.value = detail.active_agent_ids || ["hermes"];
       files.value = await conversationsApi.files(id);
+
+      // Reconnect SSE if conversation has a streaming message
+      const streamingMsg = messages.value.find((m) => m.status === "streaming");
+      if (streamingMsg) {
+        streamingConvoId.value = id;
+        registerStreamHandlers();
+        const token = tokenStore.access;
+        const url = `${API_BASE}/conversations/${id}/stream?access_token=${encodeURIComponent(token || "")}`;
+        await stream.openSSE(url);
+      }
     } finally {
       loading.value = false;
     }

@@ -425,6 +425,7 @@ class Runner:
         os.makedirs(cwd, exist_ok=True)
 
         acc = {"text": "", "cancelled": False}
+        steps: list[dict] = []  # Collect tool_call steps for persistence
 
         async def on_update(update: dict) -> None:
             kind = update.get("sessionUpdate")
@@ -437,13 +438,15 @@ class Runner:
                         {"type": "token", "message_id": message_id, "delta": delta},
                     )
             elif kind == "tool_call":
+                step = {"title": update.get("title"), "status": update.get("status")}
+                steps.append(step)
                 await R.publish_event(
                     conversation_id,
                     {
                         "type": "tool_call",
                         "message_id": message_id,
-                        "title": update.get("title"),
-                        "status": update.get("status"),
+                        "title": step["title"],
+                        "status": step["status"],
                     },
                 )
             elif kind == "confirmation_request":
@@ -556,7 +559,7 @@ class Runner:
                 # Don't await response here — the user's reply will come through
                 # the normal message flow with conversation context.
 
-        await self._finalize(message_id, acc["text"], status)
+        await self._finalize(message_id, acc["text"], status, steps)
         await R.clear_cancel(conversation_id)
         await R.publish_event(
             conversation_id,
@@ -764,11 +767,14 @@ class Runner:
                 logger.exception("Failed to save extracted file '%s'", filename)
 
     # ── DB writes (off the hot path) ──
-    async def _finalize(self, message_id: str, text: str, status: str) -> None:
+    async def _finalize(self, message_id: str, text: str, status: str, steps: list[dict] | None = None) -> None:
         async with async_session_maker() as db:
             msg = await db.get(Message, uuid.UUID(message_id))
             if msg:
-                msg.content = {"text": text}
+                content: dict = {"text": text}
+                if steps:
+                    content["tool_calls"] = steps
+                msg.content = content
                 msg.status = status
                 # touch the conversation's updated_at
                 convo = await db.get(Conversation, msg.conversation_id)
