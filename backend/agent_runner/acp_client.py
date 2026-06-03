@@ -233,10 +233,6 @@ class ACPClient:
         method = msg.get("method")
         params = msg.get("params") or {}
 
-        # Debug: log all incoming agent requests
-        if method and "id" in msg:
-            logger.info("ACP agent request: method=%s id=%s keys=%s", method, msg.get("id"), list(params.keys()))
-
         # Request FROM agent (needs a response).
         if method and "id" in msg:
             if method == "fs/write_text_file":
@@ -254,7 +250,6 @@ class ACPClient:
                 # without approval the tool is blocked. We approve if the path is
                 # inside cwd (the workspace).
                 tool_call = params.get("toolCall") or params.get("tool_call") or {}
-                logger.info("request_permission toolCall keys=%s", list(tool_call.keys()))
                 raw_input = tool_call.get("rawInput") or tool_call.get("raw_input") or {}
                 args = raw_input.get("arguments") or {}
                 edit_path = args.get("path", "")
@@ -269,10 +264,12 @@ class ACPClient:
                         edit_path = c.get("path") or ""
                         if edit_path:
                             break
-                logger.info("request_permission resolved path=%s", edit_path)
                 approved = False
                 if edit_path:
                     import os
+                    # Resolve relative paths against the workspace cwd
+                    if not os.path.isabs(edit_path):
+                        edit_path = os.path.join(self.cwd, edit_path)
                     real_cwd = os.path.realpath(self.cwd)
                     real_edit = os.path.realpath(os.path.expanduser(edit_path))
                     approved = real_edit.startswith(real_cwd + os.sep) or real_edit == real_cwd
