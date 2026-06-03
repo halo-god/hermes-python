@@ -90,6 +90,19 @@ watch(loadMoreSentinel, (el) => {
   if (el && observer) observer.observe(el);
 });
 
+// Load team knowledge when the active conversation has a team_id
+watch(
+  () => activeConvo.value?.team_id,
+  async (tid) => {
+    if (tid) {
+      try { teamKnowledge.value = await teamsApi.listKnowledge(tid); } catch { teamKnowledge.value = []; }
+    } else {
+      teamKnowledge.value = [];
+    }
+  },
+  { immediate: true }
+);
+
 // ── Greeting: time-aware + voice-aware ──
 const greeting = computed(() => {
   const hour = new Date().getHours();
@@ -219,9 +232,19 @@ function onMeasure(el: HTMLElement, _index: number) {
 
 const openFileId = ref<string | null>(null);
 
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Auto-reveal workspace when AI creates files during streaming
+watch(() => chat.files.length, (newLen, oldLen) => {
+  if (newLen > oldLen && chat.streaming) showWorkspace.value = true;
+});
+
 async function onSend(opts?: SendOptions) {
   let text = draft.value.trim();
-  if (!text || chat.streaming) return;
+  if (!text) return;
+  if (chat.isActivelyStreaming(chat.activeId || "")) return;
   draft.value = "";
   if (opts?.stagedFiles?.length) showWorkspace.value = true;
   // Prepend knowledge content inline
@@ -312,9 +335,10 @@ const wsAdapter = computed<WsAdapter>(() => {
           v-model="draft"
           :placeholder="`给 ${landingAgent?.label || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
           :agent="{ label: landingAgent?.label, color: landingAgent?.color, model: landingAgent?.version || 'ACP' }"
-          :streaming="chat.streaming"
+          :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
+          @cancel="chat.cancel()"
         />
 
         <!-- agents grid -->
@@ -453,6 +477,14 @@ const wsAdapter = computed<WsAdapter>(() => {
                   {{ agentById(chat.messages[row.index].agent_id || 'hermes')?.label || "Hermes" }}
                   <span v-if="agentById(chat.messages[row.index].agent_id || 'hermes')?.official" class="official">OFFICIAL</span>
                 </div>
+                <details v-if="chat.messages[row.index].steps?.length" class="msg-steps" style="margin-bottom:6px">
+                  <summary style="font-size:11.5px;color:var(--ink-mute);cursor:pointer;list-style:none">
+                    <Icon name="bolt" :size="11" /> 执行了 {{ chat.messages[row.index].steps!.length }} 步
+                  </summary>
+                  <div v-for="(s, i) in chat.messages[row.index].steps" :key="i" class="step-item">
+                    <span class="step-dot" :class="s.status"></span>{{ s.title }}
+                  </div>
+                </details>
                 <div class="msg-bubble">
                   <span v-if="chat.messages[row.index].status === 'streaming' && !chat.messages[row.index].content.text" class="typing"><span></span><span></span><span></span></span>
                   <div v-else-if="chat.messages[row.index].role === 'agent'" class="md-body" v-html="md(chat.messages[row.index].content.text)" />
@@ -471,6 +503,7 @@ const wsAdapter = computed<WsAdapter>(() => {
                   <button title="点赞"><Icon name="thumbs_up" :size="12" /></button>
                   <button title="分享" @click="shareMessage(chat.messages[row.index].conversation_id)"><Icon name="share" :size="12" /></button>
                 </div>
+                <div class="msg-time">{{ fmtTime(chat.messages[row.index].created_at) }}</div>
               </div>
               <div v-if="chat.messages[row.index].role === 'user'" class="msg-avatar"><Icon name="user" :size="14" /></div>
             </div>
@@ -485,10 +518,11 @@ const wsAdapter = computed<WsAdapter>(() => {
           v-model="draft"
           placeholder="继续对话…"
           :agent="{ label: primaryAgent?.label, color: primaryAgent?.color, model: primaryAgent?.version || 'ACP' }"
-          :streaming="chat.streaming"
+          :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :conversation-id="chat.activeId || undefined"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
+          @cancel="chat.cancel()"
         />
       </div>
 

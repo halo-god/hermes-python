@@ -446,6 +446,32 @@ class Runner:
                         "status": update.get("status"),
                     },
                 )
+            elif kind == "confirmation_request":
+                request_id = update.get("request_id", str(uuid.uuid4()))
+                await R.publish_event(
+                    conversation_id,
+                    {
+                        "type": "confirmation_request",
+                        "message_id": message_id,
+                        "request": {
+                            "id": request_id,
+                            "conversation_id": conversation_id,
+                            "message_id": message_id,
+                            "question": update.get("question", "需要你的确认"),
+                            "options": update.get("options", ["继续", "跳过"]),
+                        },
+                    },
+                )
+                async def _notify_response(cid: str, rid: str) -> None:
+                    try:
+                        resp = await R.wait_for_confirmation(cid, rid, timeout=300)
+                        await R.publish_event(
+                            cid,
+                            {"type": "confirmation_response", "request_id": rid, "choice": resp.get("choice", "")},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                asyncio.create_task(_notify_response(conversation_id, request_id))
             # Cooperative cancellation between chunks.
             if not acc["cancelled"] and await R.is_cancelled(conversation_id):
                 acc["cancelled"] = True
@@ -502,6 +528,7 @@ class Runner:
                 "message_id": message_id,
                 "stop_reason": stop_reason,
                 "status": status,
+                "text": acc["text"],
             },
         )
 

@@ -80,7 +80,7 @@ async def get_messages(
             .scalar_subquery()
         )
         stmt = stmt.where(Message.created_at < cursor_ts)
-    stmt = stmt.order_by(Message.created_at.desc())
+    stmt = stmt.order_by(Message.created_at.desc(), Message.role.asc())
     if limit:
         stmt = stmt.limit(limit)
     res = await db.execute(stmt)

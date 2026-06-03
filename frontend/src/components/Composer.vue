@@ -25,7 +25,7 @@ export interface SendOptions {
   knowledgeIds?: string[];
 }
 
-const emit = defineEmits<{ "update:modelValue": [string]; send: [SendOptions] }>();
+const emit = defineEmits<{ "update:modelValue": [string]; send: [SendOptions]; cancel: [] }>();
 
 const ta = ref<HTMLTextAreaElement | null>(null);
 const wrap = ref<HTMLElement | null>(null);
@@ -217,10 +217,19 @@ function onFileSelected(e: Event) {
           </div>
         </div>
         <button
+          v-if="streaming"
+          class="send-btn cancel"
+          title="中断"
+          @click="emit('cancel')"
+        >
+          <Icon name="stop" />
+        </button>
+        <button
+          v-else
           class="send-btn"
-          :class="{ armed: modelValue.trim() && !streaming, disabled: !modelValue.trim() || streaming }"
+          :class="{ armed: modelValue.trim(), disabled: !modelValue.trim() }"
           title="发送"
-          @click="modelValue.trim() && !streaming && doSend()"
+          @click="modelValue.trim() && doSend()"
         >
           <Icon name="arrow_up" />
         </button>

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { conversationsApi } from "@/api/conversations";
 import { agentsApi } from "@/api/agents";
 import { teamsApi } from "@/api/teams";
@@ -19,7 +19,8 @@ export const useChatStore = defineStore("chat", () => {
   const activeAgents = ref<string[]>(["hermes"]);
   const messages = ref<Message[]>([]);
   const files = ref<WorkspaceFile[]>([]);
-  const streaming = ref(false);
+  const streamingConvoId = ref<string | null>(null);
+  const streaming = computed(() => streamingConvoId.value !== null);
   const loading = ref(false);
   const pendingConfirmations = ref<ConfirmationRequest[]>([]);
   const hasMoreMessages = ref(true);
@@ -128,7 +129,7 @@ export const useChatStore = defineStore("chat", () => {
   const find = (id: string) => messages.value.find((x) => x.id === id);
 
   function refreshAfterTurn() {
-    streaming.value = false;
+    streamingConvoId.value = null;
     closeStream();
     if (activeId.value) {
       conversationsApi.files(activeId.value).then((f) => (files.value = f)).catch(() => {});
@@ -184,6 +185,16 @@ export const useChatStore = defineStore("chat", () => {
       if (merged) merged.text += ev.delta;
     });
 
+    stream.on("tool_call", (ev) => {
+      const m = find(ev.message_id);
+      if (m) {
+        if (!m.steps) m.steps = [];
+        const existing = m.steps.find((s) => s.title === ev.title);
+        if (existing) existing.status = ev.status || existing.status;
+        else m.steps.push({ title: ev.title || "调用工具", status: ev.status || "running" });
+      }
+    });
+
     stream.on("file", () => {
       if (activeId.value) {
         conversationsApi.files(activeId.value).then((f) => (files.value = f)).catch(() => {});
@@ -204,6 +215,7 @@ export const useChatStore = defineStore("chat", () => {
       const m = find(ev.message_id);
       if (m) {
         m.status = (ev.status as Message["status"]) || "complete";
+        if (ev.text !== undefined) m.content = { ...m.content, text: ev.text };
         if (m.content.merged && m.content.merged.status === "streaming") {
           m.content.merged.status = "complete";
         }
@@ -240,10 +252,14 @@ export const useChatStore = defineStore("chat", () => {
     else await sendSingle(id, text, passOpts);
   }
 
+  function isActivelyStreaming(id: string) {
+    return streamingConvoId.value === id;
+  }
+
   /** Single agent: open SSE, register handlers, then POST. */
   async function sendSingle(id: string, text: string, opts?: { profileId?: string; webSearch?: boolean; deepThink?: boolean; fileIds?: string[] }) {
     closeStream();
-    streaming.value = true;
+    streamingConvoId.value = id;
     registerStreamHandlers();
 
     const token = tokenStore.access;
@@ -257,7 +273,7 @@ export const useChatStore = defineStore("chat", () => {
   /** Roundtable: bidirectional WebSocket — send + stream over one socket. */
   async function sendRoundtable(id: string, text: string, opts?: { profileId?: string; webSearch?: boolean; deepThink?: boolean; fileIds?: string[] }) {
     closeStream();
-    streaming.value = true;
+    streamingConvoId.value = id;
     registerStreamHandlers();
 
     const token = tokenStore.access;
@@ -354,5 +370,6 @@ export const useChatStore = defineStore("chat", () => {
     cancel,
     deleteConversation,
     respondConfirmation,
+    isActivelyStreaming,
   };
 });
