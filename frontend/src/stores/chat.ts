@@ -319,9 +319,11 @@ export const useChatStore = defineStore("chat", () => {
 
   async function respondConfirmation(requestId: string, choice: string) {
     if (!activeId.value) return;
-    pendingConfirmations.value = pendingConfirmations.value.filter((r) => r.id !== requestId);
-    // Open SSE stream before sending the confirmation, so the agent's response is streamed back.
     const id = activeId.value;
+    pendingConfirmations.value = pendingConfirmations.value.filter((r) => r.id !== requestId);
+    // Tell the runner we responded (so it can unblock and finalize)
+    try { await conversationsApi.confirm(id, requestId, choice); } catch { /* ok */ }
+    // Open SSE stream before sending the confirmation, so the agent's response is streamed back.
     await sendSingle(id, `[用户选择了] ${choice}`);
   }
 

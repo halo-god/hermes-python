@@ -450,31 +450,25 @@ class Runner:
                     },
                 )
             elif kind == "confirmation_request":
+                # Agent natively sent a confirmation_request via session/update.
+                # Store it — we'll wait for user response AFTER the prompt returns.
                 request_id = update.get("request_id", str(uuid.uuid4()))
+                question = update.get("question", "需要你的确认")
+                options = update.get("options", ["继续", "跳过"])
+                req_payload = {
+                    "id": request_id,
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "question": question,
+                    "questions": [{"question": question, "options": options, "allow_free_text": True}],
+                    "options": options,
+                }
+                acc["pending_confirmation"] = req_payload
                 await R.publish_event(
                     conversation_id,
-                    {
-                        "type": "confirmation_request",
-                        "message_id": message_id,
-                        "request": {
-                            "id": request_id,
-                            "conversation_id": conversation_id,
-                            "message_id": message_id,
-                            "question": update.get("question", "需要你的确认"),
-                            "options": update.get("options", ["继续", "跳过"]),
-                        },
-                    },
+                    {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
                 )
-                async def _notify_response(cid: str, rid: str) -> None:
-                    try:
-                        resp = await R.wait_for_confirmation(cid, rid, timeout=300)
-                        await R.publish_event(
-                            cid,
-                            {"type": "confirmation_response", "request_id": rid, "choice": resp.get("choice", "")},
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                asyncio.create_task(_notify_response(conversation_id, request_id))
+                logger.info("confirmation_request stored, waiting for user response after prompt: %s", request_id)
             # Cooperative cancellation between chunks.
             if not acc["cancelled"] and await R.is_cancelled(conversation_id):
                 acc["cancelled"] = True
@@ -533,31 +527,49 @@ class Runner:
                 conversation_id, message_id, agent_id, acc["text"]
             )
 
-        # ── Clarification detection: if agent response is a question with options,
-        #    inject a confirmation_request so the frontend shows a choice dialog. ──
-        if status == "complete" and acc["text"]:
+        # ── Confirmation handling: wait for user response before finalizing ──
+        pending = acc.get("pending_confirmation")
+        if not pending and status == "complete" and acc["text"]:
+            # Fallback: regex-detect clarification from agent text output
             detected = self._detect_clarification(acc["text"])
             if detected:
-                request_id = str(uuid.uuid4())
                 preamble, questions = detected
-                request_payload = {
+                request_id = str(uuid.uuid4())
+                flat_opts = []
+                for q in questions:
+                    flat_opts.extend(q.get("options", []))
+                pending = {
                     "id": request_id,
                     "conversation_id": conversation_id,
                     "message_id": message_id,
                     "question": preamble,
                     "questions": questions,
-                    "options": [],  # legacy compat
+                    "options": flat_opts or ["继续", "跳过"],
                 }
                 await R.publish_event(
                     conversation_id,
-                    {
-                        "type": "confirmation_request",
-                        "message_id": message_id,
-                        "request": request_payload,
-                    },
+                    {"type": "confirmation_request", "message_id": message_id, "request": pending},
                 )
-                # Don't await response here — the user's reply will come through
-                # the normal message flow with conversation context.
+                logger.info("Regex-detected confirmation, waiting for user: %s", request_id)
+
+        if pending:
+            # Wait for user to respond (up to 5 min)
+            rid = pending["id"]
+            logger.info("Waiting for confirmation response: conv=%s rid=%s", conversation_id[:8], rid[:8])
+            try:
+                resp = await R.wait_for_confirmation(conversation_id, rid, timeout=300)
+                choice = resp.get("choice", "")
+                logger.info("Confirmation response received: %s -> %s", rid[:8], choice)
+                # Notify frontend that confirmation was handled
+                await R.publish_event(
+                    conversation_id,
+                    {"type": "confirmation_response", "request_id": rid, "choice": choice},
+                )
+                # Inject user response as a new agent turn (continues the conversation)
+                if choice and choice != "跳过":
+                    logger.info("User chose: %s (frontend will send as new turn)", choice)
+            except Exception:
+                logger.warning("Confirmation wait failed/timed out for %s", rid[:8])
 
         await self._finalize(message_id, acc["text"], status, steps)
         await R.clear_cancel(conversation_id)
