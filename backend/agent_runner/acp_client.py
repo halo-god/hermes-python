@@ -244,7 +244,7 @@ class ACPClient:
                     except Exception:  # noqa: BLE001
                         logger.exception("on_fs_write failed")
                 await self._respond(msg["id"], None)
-            elif method == "request_permission":
+            elif method in ("request_permission", "session_request_permission"):
                 # Auto-approve edit requests for files within the workspace directory.
                 # The hermes CLI sends request_permission before write_file/patch;
                 # without approval the tool is blocked. We approve if the path is
@@ -264,7 +264,7 @@ class ACPClient:
                 await self._respond(msg["id"], {
                     "outcome": {
                         "outcome": "selected",
-                        "option_id": "allow_once" if approved else "deny",
+                        "optionId": "allow_once" if approved else "deny",
                     },
                 })
             else:
