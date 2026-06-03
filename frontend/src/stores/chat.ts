@@ -321,12 +321,9 @@ export const useChatStore = defineStore("chat", () => {
     if (!activeId.value) return;
     const id = activeId.value;
     pendingConfirmations.value = pendingConfirmations.value.filter((r) => r.id !== requestId);
-    // Tell the runner we responded (so it can unblock and finalize)
+    // Tell the runner we responded (so it can unblock and continue the conversation)
     try { await conversationsApi.confirm(id, requestId, choice); } catch { /* ok */ }
-    // Skip = no new agent turn needed, just finalize the original
-    if (choice === '跳过') return;
-    // Open SSE stream before sending the confirmation, so the agent's response is streamed back.
-    await sendSingle(id, `[用户选择了] ${choice}`);
+    // Runner handles the follow-up turn internally — no need to sendSingle here
   }
 
   async function newConversationWithProfile(profileId: string): Promise<string> {

@@ -424,7 +424,7 @@ class Runner:
         cwd = os.path.join(settings.workspace_root, conversation_id)
         os.makedirs(cwd, exist_ok=True)
 
-        acc = {"text": "", "cancelled": False}
+        acc = {"text": "", "cancelled": False, "current_msg_id": message_id, "tool_since_split": False}
         steps: list[dict] = []  # Collect tool_call steps for persistence
 
         async def on_update(update: dict) -> None:
@@ -432,48 +432,65 @@ class Runner:
             if kind == "agent_message_chunk":
                 delta = (update.get("content") or {}).get("text", "")
                 if delta:
+                    # Split: new text after tool call → finalize previous, start new message
+                    if acc["tool_since_split"] and acc["text"]:
+                        await self._finalize(acc["current_msg_id"], acc["text"], "complete", steps)
+                        await R.publish_event(conversation_id, {
+                            "type": "done", "message_id": acc["current_msg_id"],
+                            "status": "complete", "text": acc["text"],
+                        })
+                        new_id = await self._create_agent_message(conversation_id, agent_id)
+                        acc["current_msg_id"] = new_id
+                        acc["text"] = ""
+                        steps.clear()
+                        acc["tool_since_split"] = False
+                        await R.publish_event(conversation_id, {"type": "start", "message_id": new_id})
                     acc["text"] += delta
                     await R.publish_event(
                         conversation_id,
-                        {"type": "token", "message_id": message_id, "delta": delta},
+                        {"type": "token", "message_id": acc["current_msg_id"], "delta": delta},
                     )
             elif kind == "tool_call":
+                acc["tool_since_split"] = True
                 step = {"title": update.get("title"), "status": update.get("status")}
                 steps.append(step)
                 await R.publish_event(
                     conversation_id,
                     {
                         "type": "tool_call",
-                        "message_id": message_id,
+                        "message_id": acc["current_msg_id"],
                         "title": step["title"],
                         "status": step["status"],
                     },
                 )
-                # Check if agent called clarify tool — bridge to confirmation_request
-                if step.get("status") == "started" and "clarify" in (step.get("title") or "").lower():
-                    await self._check_pending_clarify(
-                        conversation_id, message_id, acc
+                # Check if agent called clarify tool — read pending request from Redis
+                if "clarify" in (step.get("title") or "").lower():
+                    await self._handle_clarify_tool_call(
+                        conversation_id, acc["current_msg_id"], acc
                     )
             elif kind == "confirmation_request":
                 # Agent natively sent a confirmation_request via session/update.
-                # Store it — we'll wait for user response AFTER the prompt returns.
+                # Send SSE to frontend and wait for user response via background task.
                 request_id = update.get("request_id", str(uuid.uuid4()))
                 question = update.get("question", "需要你的确认")
                 options = update.get("options", ["继续", "跳过"])
                 req_payload = {
                     "id": request_id,
                     "conversation_id": conversation_id,
-                    "message_id": message_id,
+                    "message_id": acc["current_msg_id"],
                     "question": question,
                     "questions": [{"question": question, "options": options, "allow_free_text": True}],
                     "options": options,
                 }
-                acc.setdefault("pending_confirmations", []).append(req_payload)
                 await R.publish_event(
                     conversation_id,
-                    {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
+                    {"type": "confirmation_request", "message_id": acc["current_msg_id"], "request": req_payload},
                 )
-                logger.info("confirmation_request stored, waiting for user response after prompt: %s", request_id)
+                logger.info("Native confirmation_request, sent SSE: %s", request_id)
+                # Wait for user response in background, then inject result into agent
+                asyncio.ensure_future(
+                    self._wait_and_unblock_clarify(conversation_id, request_id)
+                )
             # Cooperative cancellation between chunks.
             if not acc["cancelled"] and await R.is_cancelled(conversation_id):
                 acc["cancelled"] = True
@@ -490,7 +507,7 @@ class Runner:
                 conversation_id,
                 {
                     "type": "file",
-                    "message_id": message_id,
+                    "message_id": acc["current_msg_id"],
                     "file_id": str(f.id),
                     "name": f.name,
                     "kind": f.kind,
@@ -517,97 +534,132 @@ class Runner:
         except ACPTimeout as exc:
             logger.error("prompt timed out for %s: %s", conversation_id, exc)
             await self.pool.drop(conversation_id)
-            await self._fail(conversation_id, message_id, f"响应超时：{exc}")
+            await self._fail(conversation_id, acc["current_msg_id"], f"响应超时：{exc}")
             return
         except Exception as exc:  # noqa: BLE001
             logger.exception("prompt failed")
             await self.pool.drop(conversation_id)
-            await self._fail(conversation_id, message_id, f"{exc.__class__.__name__}")
+            await self._fail(conversation_id, acc["current_msg_id"], f"{exc.__class__.__name__}")
             return
 
         status = "cancelled" if acc["cancelled"] else "complete"
         # ── Fallback: extract files from text if agent didn't use fs/write_text_file ──
         if status == "complete" and acc["text"]:
             await self._extract_and_save_files(
-                conversation_id, message_id, agent_id, acc["text"]
+                conversation_id, acc["current_msg_id"], agent_id, acc["text"]
             )
 
-        # ── Confirmation handling: wait for user response before finalizing ──
-        pending_list: list[dict] = acc.get("pending_confirmations", [])
-        if not pending_list and status == "complete" and acc["text"]:
-            # Fallback: regex-detect clarification from agent text output
-            detected = self._detect_clarification(acc["text"])
-            if detected:
-                preamble, questions = detected
-                request_id = str(uuid.uuid4())
-                flat_opts = []
-                for q in questions:
-                    flat_opts.extend(q.get("options", []))
-                pending_list = [{
-                    "id": request_id,
-                    "conversation_id": conversation_id,
-                    "message_id": message_id,
-                    "question": preamble,
-                    "questions": questions,
-                    "options": flat_opts or ["继续", "跳过"],
-                    "_regex": True,
-                }]
-                await R.publish_event(
-                    conversation_id,
-                    {"type": "confirmation_request", "message_id": message_id, "request": pending_list[0]},
-                )
-                logger.info("Regex-detected confirmation, waiting for user: %s", request_id)
+        # Clarify tool calls are handled during the prompt via _handle_clarify_tool_call background task.
+        # Fallback: if model output contains [确认]...[/确认] text markers (didn't call clarify tool),
+        # extract and show confirmation modal anyway.
+        if not acc.get("_clarify_handled") and status == "complete" and acc["text"]:
+            import re as _re
+            m = _re.search(r'\[确认\](.+?)\[/确认\]', acc["text"], _re.DOTALL)
+            if m:
+                content = m.group(1).strip()
+                parts = [p.strip() for p in content.split('|') if p.strip()]
+                if parts:
+                    question = parts[0]
+                    options = parts[1:] if len(parts) > 1 else ["继续", "跳过"]
+                    request_id = str(uuid.uuid4())
+                    req_payload = {
+                        "id": request_id,
+                        "conversation_id": conversation_id,
+                        "message_id": acc["current_msg_id"],
+                        "question": question,
+                        "questions": [{"question": question, "options": options, "allow_free_text": True}],
+                        "options": options,
+                    }
+                    # Strip marker from displayed text
+                    acc["text"] = _re.sub(r'\[确认\].+?\[/确认\]', '', acc["text"]).strip()
+                    await R.publish_event(
+                        conversation_id,
+                        {"type": "confirmation_request", "message_id": acc["current_msg_id"], "request": req_payload},
+                    )
+                    logger.info("Regex fallback: [确认] marker detected, sent confirmation: %s", request_id[:8])
+                    # Wait for user response
+                    try:
+                        resp = await R.wait_for_confirmation(conversation_id, request_id, timeout=300)
+                        choice = resp.get("choice", "超时")
+                        logger.info("Regex fallback confirmation response: %s", choice)
+                        await R.publish_event(
+                            conversation_id,
+                            {"type": "confirmation_response", "request_id": request_id, "choice": choice},
+                        )
+                        if choice and choice not in ("跳过", "超时"):
+                            try:
+                                acc["text"] = ""
+                                acc["steps"] = []
+                                stop_reason = await client.prompt(f"[用户选择了] {choice}")
+                                # Loop: keep detecting [确认] markers in follow-up responses
+                                import re as _re2
+                                for _loop in range(5):  # max 5 rounds
+                                    if not acc["text"]:
+                                        break
+                                    m2 = _re2.search(r'\[确认\](.+?)\[/确认\]', acc["text"], _re2.DOTALL)
+                                    if not m2:
+                                        break
+                                    content2 = m2.group(1).strip()
+                                    parts2 = [p.strip() for p in content2.split('|') if p.strip()]
+                                    if not parts2:
+                                        break
+                                    question2 = parts2[0]
+                                    options2 = parts2[1:] if len(parts2) > 1 else ["继续", "跳过"]
+                                    req_id2 = str(uuid.uuid4())
+                                    acc["text"] = _re2.sub(r'\[确认\].+?\[/确认\]', '', acc["text"]).strip()
+                                    await R.publish_event(
+                                        conversation_id,
+                                        {"type": "confirmation_request", "message_id": acc["current_msg_id"],
+                                         "request": {"id": req_id2, "conversation_id": conversation_id,
+                                                     "message_id": acc["current_msg_id"], "question": question2,
+                                                     "questions": [{"question": question2, "options": options2, "allow_free_text": True}],
+                                                     "options": options2}},
+                                    )
+                                    logger.info("Loop %d: [确认] marker detected: %s", _loop+1, req_id2[:8])
+                                    resp2 = await R.wait_for_confirmation(conversation_id, req_id2, timeout=300)
+                                    choice2 = resp2.get("choice", "超时")
+                                    logger.info("Loop %d response: %s", _loop+1, choice2)
+                                    await R.publish_event(
+                                        conversation_id,
+                                        {"type": "confirmation_response", "request_id": req_id2, "choice": choice2},
+                                    )
+                                    if not choice2 or choice2 in ("跳过", "超时"):
+                                        break
+                                    acc["text"] = ""
+                                    acc["steps"] = []
+                                    stop_reason = await client.prompt(f"[用户选择了] {choice2}")
+                                if acc["text"]:
+                                    await self._extract_and_save_files(
+                                        conversation_id, acc["current_msg_id"], agent_id, acc["text"]
+                                    )
+                            except Exception as exc:
+                                logger.warning("Follow-up prompt failed: %s", exc)
+                    except Exception:
+                        logger.warning("Regex fallback confirmation timed out")
 
-        for pending in pending_list:
-            # Wait for user to respond
-            # Agent-native confirmations: 5min timeout
-            # Regex-detected: 30s quick timeout (false positives get auto-released)
-            rid = pending["id"]
-            is_regex = pending.get("_regex", False)
-            timeout = 30 if is_regex else 300
-            logger.info("Waiting for confirmation response: conv=%s rid=%s regex=%s timeout=%ds",
-                        conversation_id[:8], rid[:8], is_regex, timeout)
-            try:
-                resp = await R.wait_for_confirmation(conversation_id, rid, timeout=timeout)
-                choice = resp.get("choice", "")
-                logger.info("Confirmation response received: %s -> %s", rid[:8], choice)
-                # Notify frontend that confirmation was handled
-                await R.publish_event(
-                    conversation_id,
-                    {"type": "confirmation_response", "request_id": rid, "choice": choice},
-                )
-                # Inject user response as a new agent turn (continues the conversation)
-                if choice and choice != "跳过":
-                    logger.info("User chose: %s (frontend will send as new turn)", choice)
-            except Exception:
-                logger.warning("Confirmation wait failed/timed out for %s", rid[:8])
-                # Notify frontend to close the modal on timeout
-                await R.publish_event(
-                    conversation_id,
-                    {"type": "confirmation_response", "request_id": rid, "choice": "超时"},
-                )
-
-        await self._finalize(message_id, acc["text"], status, steps)
+        await self._finalize(acc["current_msg_id"], acc["text"], status, steps)
         await R.clear_cancel(conversation_id)
         await R.publish_event(
             conversation_id,
             {
                 "type": "done",
-                "message_id": message_id,
+                "message_id": acc["current_msg_id"],
                 "stop_reason": stop_reason,
                 "status": status,
                 "text": acc["text"],
             },
         )
 
-    async def _check_pending_clarify(
+    async def _handle_clarify_tool_call(
         self, conversation_id: str, message_id: str, acc: dict,
     ) -> None:
-        """Check if the agent stored a pending clarify request in Redis.
+        """Handle agent's clarify tool call.
 
-        The ACP agent's clarify_callback writes to Redis key
-        ``hermes:clarify_pending:{session_id}``.  When found, we send a
-        confirmation_request SSE so the frontend shows the modal.
+        1. Read pending request from Redis (written by clarify_callback)
+        2. Send confirmation_request SSE to frontend
+        3. Start background task to wait for user response
+        4. When user responds, write back to clarify_callback's Redis keys
+           to unblock the agent thread
         """
         import json as _json
 
@@ -626,118 +678,58 @@ class Runner:
                     "message_id": message_id,
                     "question": question,
                     "questions": [{"question": question, "options": options, "allow_free_text": True}],
-                    "options": options,
+                    "options": options or ["继续", "跳过"],
                 }
-                acc.setdefault("pending_confirmations", []).append(req_payload)
                 await R.publish_event(
                     conversation_id,
                     {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
                 )
                 logger.info("Clarify tool detected, sent confirmation_request: %s", clarify_id)
+                acc["_clarify_handled"] = True
+
+                # Start background task to wait for user response and unblock agent
+                asyncio.ensure_future(
+                    self._wait_and_unblock_clarify(conversation_id, clarify_id)
+                )
         except Exception:
             logger.debug("No pending clarify request found", exc_info=True)
 
-    # ── Clarification detection: scan for questions with options ──
-    @staticmethod
-    def _detect_clarification(text: str) -> tuple[str, list[dict]] | None:
-        """Detect if the agent response is a clarification question.
+    async def _wait_and_unblock_clarify(
+        self, conversation_id: str, clarify_id: str
+    ) -> None:
+        """Wait for user response via runner's confirm pub/sub, then write back
+        to clarify_callback's Redis keys to unblock the agent thread."""
+        import json as _json
 
-        Supports multiple formats:
-          1. **标题** — 选项A、选项B、选项C？
-          2. **标题** — 选项A、选项B...？
-          3. **标题** — 纯问题？
-          4. - 选项A\n- 选项B\n- 选项C (markdown list)
-          5. A还是B？ (inline choice)
-          6. 请问...？ (direct question with options nearby)
+        response_key = f"hermes:clarify_response:{conversation_id}:{clarify_id}"
+        notify_channel = f"hermes:clarify_notify:{conversation_id}"
 
-        Returns (preamble, questions) where each question dict has:
-          - question: str
-          - options: list[str]  (empty if pure text question)
-          - allow_free_text: bool  (True if ... present or no options)
-        """
-        import re
+        try:
+            # Wait for user response via runner's confirmation mechanism
+            resp = await R.wait_for_confirmation(conversation_id, clarify_id, timeout=300)
+            choice = resp.get("choice", "超时")
+            logger.info("Clarify response for %s: %s", clarify_id[:8], choice)
 
-        text = text.strip()
+            # Notify frontend
+            await R.publish_event(
+                conversation_id,
+                {"type": "confirmation_response", "request_id": clarify_id, "choice": choice},
+            )
 
-        lines = text.split("\n")
-        questions: list[dict] = []
-        preamble_lines: list[str] = []
-
-        # ── Pattern 1: numbered items "N. **标题** — 内容？" ──
-        item_re = re.compile(
-            r"^\s*\d+[.、)）]\s*"
-            r"(?:\*\*(.+?)\*\*|(.+?))"  # title in bold or plain
-            r"\s*[—\-:：]\s*"
-            r"(.+?)"  # content after dash
-            r"[？?]\s*$"
-        )
-
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("## ") or stripped.startswith("### "):
-                continue
-            if stripped in ("需要确认以下信息：", "需要确认以下信息:"):
-                continue
-
-            m = item_re.match(stripped)
-            if m:
-                title = (m.group(1) or m.group(2) or "").strip()
-                content = m.group(3).strip()
-
-                if "、" in content:
-                    has_ellipsis = content.rstrip("？?").endswith("...")
-                    raw = content.rstrip("？?").rstrip(".")
-                    opts = [o.strip() for o in raw.split("、") if o.strip()]
-                    if opts and opts[-1].endswith("..."):
-                        opts[-1] = opts[-1][:-3].strip()
-                    if opts and not opts[-1]:
-                        opts.pop()
-                    questions.append({
-                        "question": title,
-                        "options": opts,
-                        "allow_free_text": has_ellipsis,
-                    })
-                else:
-                    questions.append({
-                        "question": title,
-                        "options": [],
-                        "allow_free_text": True,
-                    })
-            else:
-                if not questions:
-                    preamble_lines.append(stripped)
-
-        if len(questions) >= 1:
-            preamble = " ".join(preamble_lines).strip()
-            preamble = re.sub(r"^##\s*确认\s*", "", preamble)
-            preamble = re.sub(r"^需要确认以下信息[：:]\s*", "", preamble)
-            return preamble or "请选择", questions
-
-        # ── Pattern 2: markdown list "- 选项A\n- 选项B" (must have 3+ items AND a question) ──
-        list_opts = re.findall(r"^[-*]\s+(.+)$", text, re.MULTILINE)
-        if len(list_opts) >= 3:
-            q_match = re.search(r"[？?]", text)
-            if q_match:
-                q_title = text[:q_match.start()].strip().split("\n")[-1][:50] or "请选择"
-                return q_title, [{
-                    "question": q_title,
-                    "options": [o.strip() for o in list_opts],
-                    "allow_free_text": False,
-                }]
-
-        # ── Pattern 3: "A还是B" (must be the entire content or clearly a choice) ──
-        haisi = re.match(r"^(.{2,30})还是(.{2,30})[？?]?\s*$", text.strip(), re.MULTILINE)
-        if haisi and len(text.strip()) < 100:
-            return "请选择", [
-                {"question": "请选择", "options": [haisi.group(1).strip(), haisi.group(2).strip()], "allow_free_text": False}
-            ]
-
-        # ── Pattern 4: quoted options — DISABLED (too aggressive) ──
-        # Only trigger if the response is very short and purely a question with explicit options
-
-        return None
+            # Write back to clarify_callback's Redis keys to unblock agent thread
+            r = R.get_redis()
+            await r.set(response_key, choice, ex=60)
+            await r.publish(notify_channel, clarify_id)
+            logger.info("Unblocked clarify_callback for %s", clarify_id[:8])
+        except Exception:
+            logger.warning("Clarify wait failed for %s", clarify_id[:8], exc_info=True)
+            # Write timeout to unblock agent
+            try:
+                r = R.get_redis()
+                await r.set(response_key, "超时", ex=60)
+                await r.publish(notify_channel, clarify_id)
+            except Exception:
+                pass
 
     # ── Fallback: extract files from AI text response ──
     async def _extract_and_save_files(
@@ -832,6 +824,21 @@ class Runner:
                 logger.exception("Failed to save extracted file '%s'", filename)
 
     # ── DB writes (off the hot path) ──
+    async def _create_agent_message(self, conversation_id: str, agent_id: str) -> str:
+        """Create a new agent message in DB, return its ID."""
+        async with async_session_maker() as db:
+            msg = Message(
+                conversation_id=uuid.UUID(conversation_id),
+                role="agent",
+                agent_id=agent_id,
+                content={"text": ""},
+                status="streaming",
+            )
+            db.add(msg)
+            await db.commit()
+            await db.refresh(msg)
+            return str(msg.id)
+
     async def _finalize(self, message_id: str, text: str, status: str, steps: list[dict] | None = None) -> None:
         async with async_session_maker() as db:
             msg = await db.get(Message, uuid.UUID(message_id))

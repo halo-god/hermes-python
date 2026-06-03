@@ -223,8 +223,10 @@ async def send_message(
         "- 需要用户选择方向、风格、范围\n"
         "- 涉及重要决策或有风险的操作\n"
         "- 用户输入非常简短（少于10个字）\n\n"
-        "clarify 工具用法：clarify(question=\"问题\", choices=[\"选项A\", \"选项B\", \"选项C\"])\n"
-        "choices 最多4个选项。如果不确定有哪些选项，用 open-ended 模式（不传 choices）。\n\n"
+        "调用方式（必须是工具调用，不要输出文本格式）：\n"
+        'clarify(question="问题", choices=["选项A", "选项B", "选项C"])\n'
+        'clarify(question="你具体想要什么？")  # 无选项时用 open-ended\n\n'
+        "禁止在回复文本中输出 [确认] 或类似的标记格式。必须通过工具调用 clarify。\n"
         "违反此规则会导致用户不满。记住：先问再做。"
     )
     # Strict mode for short prompts: force clarify call
@@ -313,8 +315,10 @@ async def send_roundtable(
         "- 需要用户选择方向、风格、范围\n"
         "- 涉及重要决策或有风险的操作\n"
         "- 用户输入非常简短（少于10个字）\n\n"
-        "clarify 工具用法：clarify(question=\"问题\", choices=[\"选项A\", \"选项B\", \"选项C\"])\n"
-        "choices 最多4个选项。如果不确定有哪些选项，用 open-ended 模式（不传 choices）。\n\n"
+        "调用方式（必须是工具调用，不要输出文本格式）：\n"
+        'clarify(question="问题", choices=["选项A", "选项B", "选项C"])\n'
+        'clarify(question="你具体想要什么？")  # 无选项时用 open-ended\n\n'
+        "禁止在回复文本中输出 [确认] 或类似的标记格式。必须通过工具调用 clarify。\n"
         "违反此规则会导致用户不满。记住：先问再做。"
     )
     # Strict mode for short prompts: force clarify call
