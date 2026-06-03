@@ -114,10 +114,10 @@ async def create_conversation(
 async def _resolve_attached_files(
     db: AsyncSession, file_ids: list[str], conversation_id: str | None = None,
 ) -> list[dict]:
-    """Look up workspace files by id, write to agent workspace dir, return metadata.
+    """Look up workspace files by id, write to agent workspace dir, return metadata + content.
 
-    Returns [{id, name, kind, workspace_path}] — no content inline.
-    Agent reads files on demand via read_file tool from its workspace CWD.
+    Returns [{id, name, kind, workspace_path, content}].
+    Content is included inline so the agent sees it immediately without needing read_file.
     """
     if not file_ids:
         return []
@@ -136,20 +136,17 @@ async def _resolve_attached_files(
             continue
         f = await db.get(WorkspaceFile, fid)
         if f is not None:
+            file_content = f.content or ""
             # Write file content to workspace so agent can read it
-            if ws_dir and f.content:
+            if ws_dir and file_content:
                 fpath = os.path.join(ws_dir, f.name)
                 with open(fpath, "w", encoding="utf-8") as fh:
-                    fh.write(f.content)
-                result.append({
-                    "id": str(f.id), "name": f.name, "kind": f.kind,
-                    "workspace_path": f"attachments/{f.name}",
-                })
-            else:
-                result.append({
-                    "id": str(f.id), "name": f.name, "kind": f.kind,
-                    "workspace_path": None,
-                })
+                    fh.write(file_content)
+            result.append({
+                "id": str(f.id), "name": f.name, "kind": f.kind,
+                "workspace_path": f"attachments/{f.name}" if ws_dir and file_content else None,
+                "content": file_content,
+            })
     return result
 
 
@@ -194,16 +191,19 @@ async def send_message(
     await db.refresh(user_msg)
     await db.refresh(agent_msg)
 
-    # Build prompt — file references only, agent reads via read_file tool.
+    # Build prompt — file content inline so agent sees it immediately.
     prompt_text = text
     if attached:
         parts = []
         for f in attached:
-            wp = f.get("workspace_path")
-            if wp:
-                parts.append(f"[附件: {f['name']}] (文件路径: {wp}，请用 read_file 读取内容)")
+            content = f.get("content", "")
+            if content:
+                # Truncate very large files to avoid blowing up the prompt
+                if len(content) > 20000:
+                    content = content[:20000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
+                parts.append(f"【附件: {f['name']}】\n```\n{content}\n```")
             else:
-                parts.append(f"[附件: {f['name']}]（文件内容为空）")
+                parts.append(f"【附件: {f['name']}】（文件内容为空）")
         file_block = "\n\n".join(parts)
         prompt_text = f"{text}\n\n{file_block}"
 
@@ -292,11 +292,13 @@ async def send_roundtable(
     if attached:
         parts = []
         for f in attached:
-            wp = f.get("workspace_path")
-            if wp:
-                parts.append(f"[附件: {f['name']}] (文件路径: {wp}，请用 read_file 读取内容)")
+            content = f.get("content", "")
+            if content:
+                if len(content) > 20000:
+                    content = content[:20000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
+                parts.append(f"【附件: {f['name']}】\n```\n{content}\n```")
             else:
-                parts.append(f"[附件: {f['name']}]（文件内容为空）")
+                parts.append(f"【附件: {f['name']}】（文件内容为空）")
         file_block = "\n\n".join(parts)
         prompt_text = f"{text}\n\n{file_block}"
 
