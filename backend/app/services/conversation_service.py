@@ -207,6 +207,16 @@ async def send_message(
         file_block = "\n\n".join(parts)
         prompt_text = f"{text}\n\n{file_block}"
 
+    # Inject file-write instructions so agents use fs/write_text_file (ACP protocol)
+    # instead of just mentioning paths in text responses.
+    _file_write_preamble = (
+        "【文件写入规范】当你需要为用户创建、生成或导出文件时，"
+        "必须使用 fs/write_text_file 工具将文件写入工作区。"
+        "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
+        "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
+    )
+    prompt_text = f"{_file_write_preamble}\n\n{prompt_text}"
+
     await redis_core.clear_cancel(str(convo.id))
     await redis_core.enqueue_prompt(
         {
@@ -267,6 +277,15 @@ async def send_roundtable(
                 parts.append(f"[附件: {f['name']}]（文件内容为空）")
         file_block = "\n\n".join(parts)
         prompt_text = f"{text}\n\n{file_block}"
+
+    # Inject file-write instructions for roundtable agents too
+    _file_write_preamble = (
+        "【文件写入规范】当你需要为用户创建、生成或导出文件时，"
+        "必须使用 fs/write_text_file 工具将文件写入工作区。"
+        "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
+        "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
+    )
+    prompt_text = f"{_file_write_preamble}\n\n{prompt_text}"
 
     await redis_core.clear_cancel(str(convo.id))
     await redis_core.enqueue_prompt(

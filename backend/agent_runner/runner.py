@@ -519,6 +519,11 @@ class Runner:
             return
 
         status = "cancelled" if acc["cancelled"] else "complete"
+        # ── Fallback: extract files from text if agent didn't use fs/write_text_file ──
+        if status == "complete" and acc["text"]:
+            await self._extract_and_save_files(
+                conversation_id, message_id, agent_id, acc["text"]
+            )
         await self._finalize(message_id, acc["text"], status)
         await R.clear_cancel(conversation_id)
         await R.publish_event(
@@ -531,6 +536,98 @@ class Runner:
                 "text": acc["text"],
             },
         )
+
+    # ── Fallback: extract files from AI text response ──
+    async def _extract_and_save_files(
+        self, conversation_id: str, message_id: str, agent_id: str, text: str
+    ) -> None:
+        """Parse AI response text for file artifacts and save them to the workspace.
+
+        Catches two patterns:
+        1. Fenced code blocks with a filename hint (```python filename.py or ```filename.txt)
+        2. Explicit file path mentions (路径: ~/Downloads/xxx, 文件已生成 + path)
+
+        Files already saved via fs/write_text_file are skipped (dedup by name).
+        """
+        import re
+
+        from sqlalchemy import select
+
+        from app.db.models.workspace import WorkspaceFile
+
+        cid = uuid.UUID(conversation_id)
+        saved_names: set[str] = set()
+
+        # Check what's already in the workspace (from fs/write_text_file)
+        async with async_session_maker() as db:
+            res = await db.execute(
+                select(WorkspaceFile.name).where(WorkspaceFile.conversation_id == cid)
+            )
+            saved_names = {row[0] for row in res.all()}
+
+        extracted: list[tuple[str, str]] = []  # (filename, content)
+
+        # Pattern 1: fenced code blocks with filename
+        # Matches: ```python filename.py\n...\n``` or ```filename.txt\n...\n```
+        code_block_re = re.compile(
+            r"```(?:(\w+)\s+)?(\S+\.\w+)\s*\n(.*?)```",
+            re.DOTALL,
+        )
+        for m in code_block_re.finditer(text):
+            filename = m.group(2)
+            content = m.group(3).strip()
+            if filename and content and filename not in saved_names:
+                extracted.append((filename, content))
+
+        # Pattern 2: explicit file path mention + content in the text
+        # Look for "路径: ~/Downloads/xxx" or "文件已生成" patterns, then try to read the file
+        path_re = re.compile(
+            r"(?:路径|Path|文件路径|保存到|生成到|保存在)[:：]\s*"
+            r"(?:(~/)?([^\s\n]+\.\w+))",
+            re.IGNORECASE,
+        )
+        for m in path_re.finditer(text):
+            raw_path = m.group(0).split(":", 1)[-1].split("：", 1)[-1].strip()
+            if raw_path.startswith("~/"):
+                raw_path = os.path.expanduser(raw_path)
+            filename = os.path.basename(raw_path)
+            if filename in saved_names:
+                continue
+            # Try to read the file if it exists on disk
+            if os.path.isfile(raw_path):
+                try:
+                    with open(raw_path, encoding="utf-8") as fh:
+                        content = fh.read()
+                    extracted.append((filename, content))
+                except Exception:  # noqa: BLE01
+                    logger.debug("Could not read %s", raw_path)
+
+        # Deduplicate (keep first occurrence)
+        seen: set[str] = set()
+        unique: list[tuple[str, str]] = []
+        for name, content in extracted:
+            if name not in seen and name not in saved_names:
+                seen.add(name)
+                unique.append((name, content))
+
+        # Save extracted files
+        for filename, content in unique:
+            try:
+                f = await storage.save_file(cid, filename, content, agent_id)
+                await R.publish_event(
+                    conversation_id,
+                    {
+                        "type": "file",
+                        "message_id": message_id,
+                        "file_id": str(f.id),
+                        "name": f.name,
+                        "kind": f.kind,
+                        "version": f.current_version,
+                    },
+                )
+                logger.info("Fallback: extracted file '%s' from AI response", filename)
+            except Exception:  # noqa: BLE01
+                logger.exception("Failed to save extracted file '%s'", filename)
 
     # ── DB writes (off the hot path) ──
     async def _finalize(self, message_id: str, text: str, status: str) -> None:
