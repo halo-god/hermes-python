@@ -545,6 +545,7 @@ class Runner:
                     "question": preamble,
                     "questions": questions,
                     "options": flat_opts or ["继续", "跳过"],
+                    "_regex": True,
                 }]
                 await R.publish_event(
                     conversation_id,
@@ -553,11 +554,16 @@ class Runner:
                 logger.info("Regex-detected confirmation, waiting for user: %s", request_id)
 
         for pending in pending_list:
-            # Wait for user to respond (up to 5 min)
+            # Wait for user to respond
+            # Agent-native confirmations: 5min timeout
+            # Regex-detected: 30s quick timeout (false positives get auto-released)
             rid = pending["id"]
-            logger.info("Waiting for confirmation response: conv=%s rid=%s", conversation_id[:8], rid[:8])
+            is_regex = pending.get("_regex", False)
+            timeout = 30 if is_regex else 300
+            logger.info("Waiting for confirmation response: conv=%s rid=%s regex=%s timeout=%ds",
+                        conversation_id[:8], rid[:8], is_regex, timeout)
             try:
-                resp = await R.wait_for_confirmation(conversation_id, rid, timeout=300)
+                resp = await R.wait_for_confirmation(conversation_id, rid, timeout=timeout)
                 choice = resp.get("choice", "")
                 logger.info("Confirmation response received: %s -> %s", rid[:8], choice)
                 # Notify frontend that confirmation was handled
@@ -667,37 +673,27 @@ class Runner:
             preamble = re.sub(r"^需要确认以下信息[：:]\s*", "", preamble)
             return preamble or "请选择", questions
 
-        # ── Pattern 2: markdown list "- 选项A\n- 选项B" ──
+        # ── Pattern 2: markdown list "- 选项A\n- 选项B" (must have 3+ items AND a question) ──
         list_opts = re.findall(r"^[-*]\s+(.+)$", text, re.MULTILINE)
-        if len(list_opts) >= 2:
-            # Check if the text contains a question
-            q_match = re.search(r"(.{2,20})[？?]", text)
-            q_title = q_match.group(1).strip() if q_match else "请选择"
-            return q_title, [{
-                "question": q_title,
-                "options": [o.strip() for o in list_opts],
-                "allow_free_text": False,
-            }]
+        if len(list_opts) >= 3:
+            q_match = re.search(r"[？?]", text)
+            if q_match:
+                q_title = text[:q_match.start()].strip().split("\n")[-1][:50] or "请选择"
+                return q_title, [{
+                    "question": q_title,
+                    "options": [o.strip() for o in list_opts],
+                    "allow_free_text": False,
+                }]
 
-        # ── Pattern 3: "A还是B" ──
-        haisi = re.search(r"(.+?)还是(.+?)[？?]?\s*$", text, re.MULTILINE)
-        if haisi:
+        # ── Pattern 3: "A还是B" (must be the entire content or clearly a choice) ──
+        haisi = re.match(r"^(.{2,30})还是(.{2,30})[？?]?\s*$", text.strip(), re.MULTILINE)
+        if haisi and len(text.strip()) < 100:
             return "请选择", [
                 {"question": "请选择", "options": [haisi.group(1).strip(), haisi.group(2).strip()], "allow_free_text": False}
             ]
 
-        # ── Pattern 4: "你想...吗？" or "需要...吗？" with options nearby ──
-        # Only trigger if the response is short (likely a question, not a long answer)
-        if len(text) < 200:
-            q_end = re.search(r"[？?]\s*$", text)
-            if q_end:
-                # Look for quoted options: "选项A"、"选项B"
-                quoted = re.findall(r"[「\"'](.+?)[」\"']", text)
-                if len(quoted) >= 2:
-                    return "请选择", [
-                        {"question": text.split("？")[0].split("?")[0].strip()[:50],
-                         "options": quoted, "allow_free_text": False}
-                    ]
+        # ── Pattern 4: quoted options — DISABLED (too aggressive) ──
+        # Only trigger if the response is very short and purely a question with explicit options
 
         return None
 
