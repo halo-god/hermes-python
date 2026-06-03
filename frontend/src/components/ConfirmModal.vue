@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import ModalShell from "@/components/ModalShell.vue";
+import { ref, watch } from "vue";
 import type { ConfirmationRequest } from "@/types";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     // AI confirmation mode
     request?: ConfirmationRequest;
@@ -20,6 +20,38 @@ const emit = defineEmits<{
   confirm: [];
   respond: [choice: string];
 }>();
+
+// Multi-select state
+const selected = ref<Set<string>>(new Set());
+
+// Reset selection when request changes
+watch(
+  () => props.request,
+  () => {
+    selected.value = new Set();
+  },
+  { immediate: true }
+);
+
+function toggle(opt: string) {
+  if (selected.value.has(opt)) {
+    selected.value.delete(opt);
+  } else {
+    selected.value.add(opt);
+  }
+  // Force reactivity
+  selected.value = new Set(selected.value);
+}
+
+function submitSelection() {
+  if (selected.value.size === 0) return;
+  const choice = Array.from(selected.value).join(", ");
+  emit("respond", choice);
+}
+
+function isMultiSelect(): boolean {
+  return (props.request?.options?.length || 0) > 2;
+}
 </script>
 
 <template>
@@ -32,7 +64,9 @@ const emit = defineEmits<{
             <span class="confirm-icon">🤔</span>
             <div>
               <div class="confirm-title">需要您的确认</div>
-              <div class="confirm-sub">AI 在继续前需要您做出选择</div>
+              <div class="confirm-sub">
+                {{ isMultiSelect() ? "可多选，选完点击确认" : "请选择一个选项" }}
+              </div>
             </div>
           </div>
           <div class="confirm-question">{{ request.question }}</div>
@@ -41,13 +75,25 @@ const emit = defineEmits<{
               v-for="opt in request.options"
               :key="opt"
               class="confirm-option"
-              @click="emit('respond', opt)"
+              :class="{ selected: selected.has(opt) }"
+              @click="isMultiSelect() ? toggle(opt) : emit('respond', opt)"
             >
+              <span v-if="isMultiSelect()" class="checkbox" :class="{ checked: selected.has(opt) }">
+                {{ selected.has(opt) ? "✓" : "" }}
+              </span>
               {{ opt }}
             </button>
           </div>
           <div class="confirm-footer">
             <button class="btn" @click="emit('respond', 'deny')">跳过</button>
+            <button
+              v-if="isMultiSelect()"
+              class="btn btn-primary"
+              :disabled="selected.size === 0"
+              @click="submitSelection"
+            >
+              确认选择 ({{ selected.size }})
+            </button>
           </div>
         </div>
       </div>
@@ -56,21 +102,23 @@ const emit = defineEmits<{
 
   <!-- Classic Dialog Mode -->
   <template v-else>
-    <ModalShell :title="title" :width="420" @close="emit('close')">
-      <p style="font-size: 13.5px; color: var(--ink-soft); line-height: 1.6; margin: 0">{{ message }}</p>
-      <template #foot>
-        <div style="display: flex; gap: 8px; justify-content: flex-end; width: 100%">
-          <button class="btn" @click="emit('close')">取消</button>
-          <button
-            class="btn"
-            :style="danger ? 'color:#fff;background:var(--danger);border-color:var(--danger)' : 'color:#fff;background:var(--accent);border-color:var(--accent)'"
-            @click="emit('confirm')"
-          >
-            {{ confirmText }}
-          </button>
+    <Teleport to="body">
+      <div class="confirm-overlay" @click.self="emit('close')">
+        <div class="confirm-modal" style="max-width: 420px">
+          <div class="confirm-question">{{ message }}</div>
+          <div class="confirm-footer">
+            <button class="btn" @click="emit('close')">取消</button>
+            <button
+              class="btn"
+              :style="danger ? 'color:#fff;background:var(--danger);border-color:var(--danger)' : 'color:#fff;background:var(--accent);border-color:var(--accent)'"
+              @click="emit('confirm')"
+            >
+              {{ confirmText }}
+            </button>
+          </div>
         </div>
-      </template>
-    </ModalShell>
+      </div>
+    </Teleport>
   </template>
 </template>
 
@@ -140,16 +188,67 @@ const emit = defineEmits<{
   text-align: left;
   cursor: pointer;
   transition: border-color 160ms, background 160ms;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .confirm-option:hover {
   border-color: var(--accent);
   background: var(--accent-tint);
   color: var(--accent-deep);
 }
+.confirm-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+.checkbox {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1.5px solid var(--rule);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: all 160ms;
+}
+.checkbox.checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
 .confirm-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   border-top: 1px solid var(--rule-soft);
   padding-top: 14px;
+}
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 160ms;
+}
+.btn:hover {
+  border-color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
 }
 </style>

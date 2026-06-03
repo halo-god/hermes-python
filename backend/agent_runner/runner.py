@@ -573,28 +573,49 @@ class Runner:
         """Detect if the agent response is a clarification question with options.
 
         Returns (question, options) if detected, None otherwise.
-        Heuristics:
-        - Contains numbered options (1. 2. 3.) — at least 2
-        - Or contains "还是" patterns
-        - Doesn't require trailing question mark (agent may add examples after)
+        Supports:
+        - New template format: "## 确认\n需要确认以下信息：\n\n1. xxx\n2. xxx"
+        - Legacy numbered lists: "1. xxx\n2. xxx"
+        - "A还是B" pattern
         """
         import re
 
         text = text.strip()
 
-        # Pattern 1: Numbered list items (1. xxx 2. xxx or 1、xxx 2、xxx)
+        # Pattern 0: Template format — "## 确认" or "需要确认以下信息"
+        template_match = re.search(
+            r"(?:##\s*确认|需要确认以下信息)[：:\s]*(.*)", text, re.DOTALL
+        )
+        if template_match:
+            block = template_match.group(1)
+            numbered = re.findall(r"(?:^|\n)\s*\d+[.、)）]\s*(.+?)(?=\n|$)", block)
+            if len(numbered) >= 2:
+                # Extract question: text before the template marker
+                marker = re.search(r"(?:##\s*确认|需要确认以下信息)", text)
+                question = text[: marker.start()].strip() if marker else ""
+                # Clean options: just the name, no extra text
+                options = []
+                for opt in numbered:
+                    cleaned = opt.strip().rstrip("？?。. ")
+                    # Remove markdown bold
+                    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+                    # Remove parenthetical examples
+                    cleaned = re.sub(r"[（(][^）)]*[）)]", "", cleaned).strip()
+                    if cleaned:
+                        options.append(cleaned)
+                if len(options) >= 2:
+                    return question or "请选择", options
+
+        # Pattern 1: Numbered list items (legacy format)
         numbered = re.findall(r"(?:^|\n)\s*\d+[.、)）]\s*(.+?)(?=\n|$)", text)
         if len(numbered) >= 2:
-            # Extract the question: everything before the first numbered item
             first_num = re.search(r"(?:^|\n)\s*\d+[.、)）]", text)
             question = text[: first_num.start()].strip() if first_num else text
-            # Clean up options: remove trailing punctuation, markdown bold
             options = []
             for opt in numbered:
                 cleaned = opt.rstrip("？?。. ").strip()
-                # Remove markdown bold markers
                 cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
-                # Extract just the label part (before colon/：)
+                cleaned = re.sub(r"[（(][^）)]*[）)]", "", cleaned).strip()
                 if "：" in cleaned:
                     cleaned = cleaned.split("：")[0].strip()
                 elif ":" in cleaned:
@@ -604,17 +625,12 @@ class Runner:
             if len(options) >= 2:
                 return question or "请选择", options
 
-        # Pattern 2: "A还是B" or "A 或 B"
+        # Pattern 2: "A还是B"
         haisi = re.search(r"(.+?)还是(.+?)[？?]?\s*$", text)
         if haisi:
             opts = [haisi.group(1).strip(), haisi.group(2).strip()]
             question = text[: haisi.start()].strip()
             return question or "请选择", opts
-
-        # Pattern 3: Lines ending with "？" as separate options
-        q_lines = [l.strip() for l in text.split("\n") if l.strip().endswith("？")]
-        if len(q_lines) >= 2:
-            return "请选择一个选项", q_lines
 
         return None
 
