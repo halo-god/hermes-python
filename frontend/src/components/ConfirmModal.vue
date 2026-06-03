@@ -1,12 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, computed } from "vue";
 import type { ConfirmationRequest } from "@/types";
 
 const props = withDefaults(
   defineProps<{
-    // AI confirmation mode
     request?: ConfirmationRequest;
-    // Classic dialog mode
     title?: string;
     message?: string;
     confirmText?: string;
@@ -21,41 +19,85 @@ const emit = defineEmits<{
   respond: [choice: string];
 }>();
 
-// Multi-select state
-const selected = ref<Set<string>>(new Set());
+// Multi-step wizard state
+const currentStep = ref(0);
+const answers = ref<string[]>([]);
 
-// Reset selection when request changes
+// Determine if multi-question mode
+const isMultiQuestion = computed(() => {
+  return (props.request?.questions?.length || 0) > 0;
+});
+
+// Current question's options
+const currentOptions = computed(() => {
+  if (isMultiQuestion.value && props.request?.questions) {
+    return props.request.questions[currentStep.value]?.options || [];
+  }
+  return props.request?.options || [];
+});
+
+// Current question text
+const currentQuestion = computed(() => {
+  if (isMultiQuestion.value && props.request?.questions) {
+    return props.request.questions[currentStep.value]?.question || "";
+  }
+  return props.request?.question || "";
+});
+
+// Total steps
+const totalSteps = computed(() => {
+  if (isMultiQuestion.value && props.request?.questions) {
+    return props.request.questions.length;
+  }
+  return 1;
+});
+
+// Is this the last step?
+const isLastStep = computed(() => currentStep.value >= totalSteps.value - 1);
+
+// Reset when request changes
 watch(
   () => props.request,
   () => {
-    selected.value = new Set();
+    currentStep.value = 0;
+    answers.value = [];
   },
   { immediate: true }
 );
 
-function toggle(opt: string) {
-  if (selected.value.has(opt)) {
-    selected.value.delete(opt);
+function selectOption(opt: string) {
+  if (isMultiQuestion.value) {
+    // Record answer and advance
+    answers.value[currentStep.value] = opt;
+    if (isLastStep.value) {
+      submitAll();
+    } else {
+      currentStep.value++;
+    }
   } else {
-    selected.value.add(opt);
+    // Single question: emit immediately
+    emit("respond", opt);
   }
-  // Force reactivity
-  selected.value = new Set(selected.value);
 }
 
-function submitSelection() {
-  if (selected.value.size === 0) return;
-  const choice = Array.from(selected.value).join(", ");
-  emit("respond", choice);
+function submitAll() {
+  if (!props.request?.questions) return;
+  // Build summary: "Q1: A, Q2: B, Q3: C"
+  const parts = props.request.questions.map((q, i) => {
+    const answer = answers.value[i] || "跳过";
+    return `${q.question}: ${answer}`;
+  });
+  emit("respond", parts.join("; "));
 }
 
-function isMultiSelect(): boolean {
-  return (props.request?.options?.length || 0) > 2;
+function goBack() {
+  if (currentStep.value > 0) {
+    currentStep.value--;
+  }
 }
 </script>
 
 <template>
-  <!-- AI Confirmation Mode -->
   <template v-if="request">
     <Teleport to="body">
       <div class="confirm-overlay" @click.self="emit('close')">
@@ -63,36 +105,47 @@ function isMultiSelect(): boolean {
           <div class="confirm-header">
             <span class="confirm-icon">🤔</span>
             <div>
-              <div class="confirm-title">需要您的确认</div>
+              <div class="confirm-title">
+                {{ isMultiQuestion ? `问题 ${currentStep + 1} / ${totalSteps}` : "需要您的确认" }}
+              </div>
               <div class="confirm-sub">
-                {{ isMultiSelect() ? "可多选，选完点击确认" : "请选择一个选项" }}
+                {{ request.question || "AI 在继续前需要您做出选择" }}
               </div>
             </div>
           </div>
-          <div class="confirm-question">{{ request.question }}</div>
+
+          <!-- Progress bar for multi-step -->
+          <div v-if="isMultiQuestion" class="progress-bar">
+            <div
+              class="progress-fill"
+              :style="{ width: `${((currentStep + 1) / totalSteps) * 100}%` }"
+            />
+          </div>
+
+          <!-- Current question -->
+          <div class="confirm-question">{{ currentQuestion }}</div>
+
+          <!-- Options -->
           <div class="confirm-options">
             <button
-              v-for="opt in request.options"
+              v-for="opt in currentOptions"
               :key="opt"
               class="confirm-option"
-              :class="{ selected: selected.has(opt) }"
-              @click="isMultiSelect() ? toggle(opt) : emit('respond', opt)"
+              @click="selectOption(opt)"
             >
-              <span v-if="isMultiSelect()" class="checkbox" :class="{ checked: selected.has(opt) }">
-                {{ selected.has(opt) ? "✓" : "" }}
-              </span>
               {{ opt }}
             </button>
           </div>
+
+          <!-- Footer -->
           <div class="confirm-footer">
-            <button class="btn" @click="emit('respond', 'deny')">跳过</button>
+            <button class="btn" @click="emit('respond', 'deny')">跳过全部</button>
             <button
-              v-if="isMultiSelect()"
-              class="btn btn-primary"
-              :disabled="selected.size === 0"
-              @click="submitSelection"
+              v-if="isMultiQuestion && currentStep > 0"
+              class="btn"
+              @click="goBack"
             >
-              确认选择 ({{ selected.size }})
+              上一步
             </button>
           </div>
         </div>
@@ -161,8 +214,22 @@ function isMultiSelect(): boolean {
   color: var(--ink-mute);
   margin-top: 2px;
 }
+.progress-bar {
+  height: 4px;
+  background: var(--rule);
+  border-radius: 2px;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 300ms ease;
+}
 .confirm-question {
   font-size: 14px;
+  font-weight: 500;
   color: var(--ink);
   line-height: 1.6;
   margin-bottom: 20px;
@@ -188,36 +255,11 @@ function isMultiSelect(): boolean {
   text-align: left;
   cursor: pointer;
   transition: border-color 160ms, background 160ms;
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 .confirm-option:hover {
   border-color: var(--accent);
   background: var(--accent-tint);
   color: var(--accent-deep);
-}
-.confirm-option.selected {
-  border-color: var(--accent);
-  background: var(--accent-tint);
-  color: var(--accent-deep);
-}
-.checkbox {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  border: 1.5px solid var(--rule);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  flex-shrink: 0;
-  transition: all 160ms;
-}
-.checkbox.checked {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
 }
 .confirm-footer {
   display: flex;
@@ -238,17 +280,5 @@ function isMultiSelect(): boolean {
 }
 .btn:hover {
   border-color: var(--accent);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
 }
 </style>

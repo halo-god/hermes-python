@@ -536,19 +536,30 @@ class Runner:
             detected = self._detect_clarification(acc["text"])
             if detected:
                 request_id = str(uuid.uuid4())
-                question, options = detected
+                question, options_or_questions = detected
+                # Check if multi-question (list of dicts) or single question (list of str)
+                is_multi = (
+                    isinstance(options_or_questions, list)
+                    and options_or_questions
+                    and isinstance(options_or_questions[0], dict)
+                )
+                request_payload = {
+                    "id": request_id,
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "question": question,
+                }
+                if is_multi:
+                    request_payload["questions"] = options_or_questions
+                    request_payload["options"] = []  # legacy compat
+                else:
+                    request_payload["options"] = options_or_questions
                 await R.publish_event(
                     conversation_id,
                     {
                         "type": "confirmation_request",
                         "message_id": message_id,
-                        "request": {
-                            "id": request_id,
-                            "conversation_id": conversation_id,
-                            "message_id": message_id,
-                            "question": question,
-                            "options": options,
-                        },
+                        "request": request_payload,
                     },
                 )
                 # Don't await response here — the user's reply will come through
@@ -569,20 +580,51 @@ class Runner:
 
     # ── Clarification detection: scan for questions with options ──
     @staticmethod
-    def _detect_clarification(text: str) -> tuple[str, list[str]] | None:
+    def _detect_clarification(text: str) -> tuple[str, list[str] | list[dict]] | None:
         """Detect if the agent response is a clarification question with options.
 
-        Returns (question, options) if detected, None otherwise.
+        Returns (question, options_or_questions) if detected, None otherwise.
         Supports:
-        - New template format: "## 确认\n需要确认以下信息：\n\n1. xxx\n2. xxx"
-        - Legacy numbered lists: "1. xxx\n2. xxx"
+        - Multi-question template: "### Q1\n1. A\n2. B\n\n### Q2\n1. C\n2. D"
+        - Single question template: "## 确认\n1. A\n2. B"
+        - Legacy numbered lists
         - "A还是B" pattern
+
+        When multiple ### sections found, returns list of dicts:
+        [{"question": "Q1", "options": ["A", "B"]}, {"question": "Q2", "options": ["C", "D"]}]
         """
         import re
 
         text = text.strip()
 
-        # Pattern 0: Template format — "## 确认" or "需要确认以下信息"
+        # Pattern 0: Multi-question template — "### xxx" sections
+        h3_sections = re.findall(r"###\s*(.+?)(?=\n|$)(.*?)(?=###|\Z)", text, re.DOTALL)
+        if h3_sections:
+            questions = []
+            for title, body in h3_sections:
+                title = title.strip()
+                numbered = re.findall(r"(?:^|\n)\s*\d+[.、)）]\s*(.+?)(?=\n|$)", body)
+                if numbered:
+                    options = []
+                    for opt in numbered:
+                        cleaned = opt.strip().rstrip("？?。. ")
+                        cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+                        cleaned = re.sub(r"[（(][^）)]*[）)]", "", cleaned).strip()
+                        if cleaned:
+                            options.append(cleaned)
+                    if options:
+                        questions.append({"question": title, "options": options})
+            if len(questions) >= 1:
+                # Extract the preamble text before first ### as the main question
+                marker = re.search(r"###", text)
+                preamble = text[: marker.start()].strip() if marker else ""
+                # Clean preamble: remove ## 确认 and 需要确认以下信息
+                preamble = re.sub(r"##\s*确认\s*", "", preamble)
+                preamble = re.sub(r"需要确认以下信息[：:]\s*", "", preamble)
+                preamble = preamble.strip()
+                return preamble or "请选择", questions
+
+        # Pattern 1: Single question template — "## 确认" or "需要确认以下信息"
         template_match = re.search(
             r"(?:##\s*确认|需要确认以下信息)[：:\s]*(.*)", text, re.DOTALL
         )
@@ -590,23 +632,19 @@ class Runner:
             block = template_match.group(1)
             numbered = re.findall(r"(?:^|\n)\s*\d+[.、)）]\s*(.+?)(?=\n|$)", block)
             if len(numbered) >= 2:
-                # Extract question: text before the template marker
                 marker = re.search(r"(?:##\s*确认|需要确认以下信息)", text)
                 question = text[: marker.start()].strip() if marker else ""
-                # Clean options: just the name, no extra text
                 options = []
                 for opt in numbered:
                     cleaned = opt.strip().rstrip("？?。. ")
-                    # Remove markdown bold
                     cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
-                    # Remove parenthetical examples
                     cleaned = re.sub(r"[（(][^）)]*[）)]", "", cleaned).strip()
                     if cleaned:
                         options.append(cleaned)
                 if len(options) >= 2:
                     return question or "请选择", options
 
-        # Pattern 1: Numbered list items (legacy format)
+        # Pattern 2: Numbered list items (legacy format)
         numbered = re.findall(r"(?:^|\n)\s*\d+[.、)）]\s*(.+?)(?=\n|$)", text)
         if len(numbered) >= 2:
             first_num = re.search(r"(?:^|\n)\s*\d+[.、)）]", text)
@@ -625,7 +663,7 @@ class Runner:
             if len(options) >= 2:
                 return question or "请选择", options
 
-        # Pattern 2: "A还是B"
+        # Pattern 3: "A还是B"
         haisi = re.search(r"(.+?)还是(.+?)[？?]?\s*$", text)
         if haisi:
             opts = [haisi.group(1).strip(), haisi.group(2).strip()]

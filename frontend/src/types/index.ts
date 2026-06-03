@@ -221,6 +221,8 @@ export interface ConfirmationRequest {
   message_id: string;
   question: string;
   options: string[];
+  // Multi-question mode: each sub-question has its own options
+  questions?: Array<{ question: string; options: string[] }>;
 }
 
 export interface RtAgentMeta {
