@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 import { darkTheme, NConfigProvider, NMessageProvider, NDialogProvider } from "naive-ui";
 import { useAuthStore } from "@/stores/auth";
 import { useTheme } from "@/composables/useTheme";
+import { usePresence } from "@/composables/usePresence";
 
 const auth = useAuthStore();
 const { theme } = useTheme();
+const { startHeartbeat, stopHeartbeat } = usePresence();
 
 const naiveTheme = computed(() => (theme.value === "dark" ? darkTheme : null));
 const themeOverrides = computed(() => ({
@@ -21,6 +23,12 @@ const themeOverrides = computed(() => ({
 }));
 
 onMounted(() => auth.bootstrap());
+
+// Start presence heartbeat when user is authenticated
+watch(() => auth.user, (user) => {
+  if (user) startHeartbeat();
+  else stopHeartbeat();
+}, { immediate: true });
 </script>
 
 <template>

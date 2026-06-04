@@ -13,6 +13,7 @@ import { useChatStore } from "@/stores/chat";
 import { useNotificationStore } from "@/stores/notifications";
 import { conversationsApi } from "@/api/conversations";
 import { teamsApi } from "@/api/teams";
+import { projectsApi } from "@/api/projects";
 import { renderMarkdown, renderMarkdownAsync } from "@/utils/markdown";
 import type { Knowledge, Message, RoundtableReply, WsAdapter } from "@/types";
 import type { SendOptions } from "@/components/Composer.vue";
@@ -34,6 +35,8 @@ const showWorkspace = ref(false);
 const showExtractModal = ref(false);
 const landingProfileId = ref<string>("");
 const teamKnowledge = ref<Knowledge[]>([]);
+const projectTasks = ref<{ id: string; title: string; status: string }[]>([]);
+const showProjectTasks = ref(false);
 // roundtable per-reply chosen state (keyed by messageId:slot)
 const chosenMap = ref<Record<string, boolean>>({});
 
@@ -122,6 +125,19 @@ watch(
   { immediate: true }
 );
 
+// Load project tasks when the active conversation has a project_id
+watch(
+  () => (activeConvo.value as any)?.project_id,
+  async (pid) => {
+    if (pid) {
+      try { projectTasks.value = await projectsApi.tasks(pid); } catch { projectTasks.value = []; }
+    } else {
+      projectTasks.value = [];
+    }
+  },
+  { immediate: true }
+);
+
 // ── Team / project context tags in thread meta ──
 const convoTeamName = computed(() => {
   const tid = activeConvo.value?.team_id;
@@ -130,6 +146,10 @@ const convoTeamName = computed(() => {
 const convoProjectName = computed(() => {
   return (activeConvo.value as any)?.project_name || null;
 });
+const convoProjectId = computed(() => {
+  return (activeConvo.value as any)?.project_id || null;
+});
+const TASK_STATUS_ICON: Record<string, string> = { todo: "○", doing: "►", done: "✓" };
 
 function profileByAgentId(agentId: string): Profile | undefined {
   return chat.profiles.find((p) => p.default_agent_id === agentId);
@@ -394,9 +414,30 @@ async function sendFollowup(text: string) {
 }
 
 // ── Knowledge reference display filter ──
+function extractKnowledgeRefs(text: string): string[] {
+  const refs: string[] = [];
+  const regex = /<knowledge>[\s\S]*?【知识库:\s*([^】]+)】[\s\S]*?<\/knowledge>/g;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    refs.push(m[1].trim());
+  }
+  return refs;
+}
 function displayText(text: string): string {
-  // Hide <knowledge>...</knowledge> blocks from user display
+  // Remove <knowledge>...</knowledge> blocks, keep the rest
   return text.replace(/<knowledge>[\s\S]*?<\/knowledge>\s*/g, "").trim();
+}
+function displayHtml(text: string): string {
+  // Strip knowledge blocks then render markdown (handles <quote> etc.)
+  let stripped = displayText(text);
+  // Convert <quote> tags to markdown blockquotes for rendering
+  stripped = stripped.replace(/<quote(?:\s+summary="([^"]*)")?>\s*\n?([\s\S]*?)\n?\s*<\/quote>/g,
+    (_m, summary, content) => {
+      const lines = (content || "").trim().split("\n");
+      const quoted = lines.map((l: string) => `> ${l}`).join("\n");
+      return summary ? `> **${summary}**\n${quoted}` : quoted;
+    });
+  return renderMarkdown(stripped);
 }
 
 // ── Agent working phase display ──
@@ -579,6 +620,21 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
             <button class="search-close" @click="showSearch = false; searchQuery = ''"><Icon name="close" :size="11" /></button>
           </div>
 
+          <!-- Project tasks panel -->
+          <div v-if="convoProjectId && projectTasks.length" class="project-tasks-panel">
+            <button class="project-tasks-toggle" @click="showProjectTasks = !showProjectTasks">
+              <Icon name="check" :size="12" /> 项目任务 · {{ projectTasks.filter(t => t.status === 'done').length }}/{{ projectTasks.length }}
+              <Icon :name="showProjectTasks ? 'chevron_up' : 'chevron_down'" :size="11" />
+            </button>
+            <div v-if="showProjectTasks" class="project-tasks-list">
+              <div v-for="t in projectTasks" :key="t.id" class="ptask-row" :class="t.status">
+                <span class="ptask-icon" :class="t.status">{{ TASK_STATUS_ICON[t.status] || '○' }}</span>
+                <span class="ptask-title" :class="{ done: t.status === 'done' }">{{ t.title }}</span>
+                <span class="ptask-status">{{ { todo: '待办', doing: '进行中', done: '已完成' }[t.status] || t.status }}</span>
+              </div>
+            </div>
+          </div>
+
           <!-- messages (virtual scroll) -->
           <div v-if="chat.hasMoreMessages || chat.loadingOlder" ref="loadMoreSentinel" class="load-more-sentinel">
             <span v-if="chat.loadingOlder" class="loading-spinner"></span>
@@ -674,7 +730,13 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                   </template>
                   <div v-else-if="chat.messages[row.index].role === 'agent'" class="md-body" v-html="mdSearch(chat.messages[row.index].content.text)" />
                   <template v-else>
-                    {{ displayText(chat.messages[row.index].content.text) }}
+                    <div v-if="displayText(chat.messages[row.index].content.text)" class="md-body" v-html="displayHtml(chat.messages[row.index].content.text)"></div>
+                    <div v-if="extractKnowledgeRefs(chat.messages[row.index].content.text).length" class="knowledge-refs-badge">
+                      <Icon name="doc" :size="11" /> 引用了知识库: {{ extractKnowledgeRefs(chat.messages[row.index].content.text).join(', ') }}
+                    </div>
+                    <div v-if="!displayText(chat.messages[row.index].content.text) && extractKnowledgeRefs(chat.messages[row.index].content.text).length" class="knowledge-refs-badge standalone">
+                      <Icon name="doc" :size="11" /> 已发送知识库: {{ extractKnowledgeRefs(chat.messages[row.index].content.text).join(', ') }}
+                    </div>
                     <div v-if="chat.messages[row.index].content.files?.length" class="msg-files">
                       <button v-for="f in chat.messages[row.index].content.files" :key="f.id" class="msg-file-chip" @click="openFile(f.id)">
                         <Icon name="paperclip" :size="11" /> {{ f.name }}

@@ -264,9 +264,14 @@ async function sendChannelMessage() {
   const text = channelDraft.value.trim();
   if (!text || !channelConvo.value || channelSending.value) return;
 
-  // In mention mode: only trigger agent if message contains @mention
-  const hasMention = /@[^\s]+/.test(text);
-  if (channelMode.value === "mention" && !hasMention) {
+  // In mention mode: only trigger agent if message contains @mention of an agent
+  const mentionRegex = /@([^\s]+)/g;
+  const allMentionIds: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = mentionRegex.exec(text)) !== null) allMentionIds.push(m[1]);
+  const agentIds = new Set(teamProfiles.value.map((p) => p.handle || p.id));
+  const hasAgentMention = allMentionIds.some((mid) => agentIds.has(mid));
+  if (channelMode.value === "mention" && !hasAgentMention) {
     // Save user message without triggering agent
     try {
       const res = await conversationsApi.send(channelConvo.value.id, text, { skipAgent: true });

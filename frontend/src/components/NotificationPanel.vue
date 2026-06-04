@@ -1,10 +1,14 @@
 <script setup lang="ts">
 /* Notification bell dropdown — shows inbox from notifications store. */
 import { computed, ref, onBeforeUnmount, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import { useNotificationStore } from "@/stores/notifications";
+import { useChatStore } from "@/stores/chat";
 
 const ns = useNotificationStore();
+const router = useRouter();
+const chat = useChatStore();
 const open = ref(false);
 const wrap = ref<HTMLElement | null>(null);
 
@@ -14,6 +18,22 @@ function onDoc(e: MouseEvent) {
 }
 onMounted(() => document.addEventListener("mousedown", onDoc));
 onBeforeUnmount(() => document.removeEventListener("mousedown", onDoc));
+
+async function onNotifClick(n: { id: number; link?: string }) {
+  ns.markRead(n.id);
+  if (n.link) {
+    // Parse ?c=conversationId from link
+    const match = n.link.match(/[?&]c=([^&]+)/);
+    if (match) {
+      const cid = match[1];
+      await chat.openConversation(cid);
+      router.push("/");
+    } else {
+      router.push(n.link);
+    }
+    open.value = false;
+  }
+}
 
 const unread = computed(() => ns.unreadCount());
 const KIND_ICON: Record<string, string> = { info: "sparkle", success: "check", warn: "bolt", error: "close" };
@@ -58,8 +78,8 @@ function relTime(ts: string) {
             v-for="n in ns.inbox"
             :key="n.id"
             class="notif-item"
-            :class="{ unread: !n.read }"
-            @click="ns.markRead(n.id)"
+            :class="{ unread: !n.read, 'has-link': !!n.link }"
+            @click="onNotifClick(n)"
           >
             <span class="notif-kind-icon" :style="{ color: KIND_COLOR[n.kind] }">
               <Icon :name="KIND_ICON[n.kind] || 'sparkle'" :size="14" />
@@ -139,6 +159,8 @@ function relTime(ts: string) {
 }
 .notif-item:last-child { border-bottom: none }
 .notif-item:hover { background: rgba(29, 26, 20, 0.04) }
+.notif-item.has-link { cursor: pointer }
+.notif-item.has-link:hover { background: rgba(184, 133, 42, 0.08) }
 .notif-item.unread { background: var(--accent-tint) }
 .notif-item.unread:hover { background: color-mix(in srgb, var(--accent-tint) 85%, var(--rule)) }
 .notif-kind-icon { flex-shrink: 0; padding-top: 1px }
