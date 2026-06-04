@@ -42,14 +42,11 @@ const form = reactive({
   visibility: (props.project as any)?.visibility || "team",
 });
 
-// Use profiles directly, deduplicate by agent_id
 const agentItems = computed(() => {
   return chat.profiles
     .filter((p) => p.is_active)
-    .filter((p, i, arr) => arr.findIndex((x) => x.default_agent_id === p.default_agent_id) === i)
-    .slice(0, 8)
     .map((p) => ({
-      id: p.default_agent_id || p.handle || p.id,
+      id: p.id,
       label: p.name,
       icon: p.icon || "sparkle",
       color: p.color || "#b8852a",

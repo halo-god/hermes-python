@@ -15,13 +15,10 @@ const emit = defineEmits<{ close: []; updated: [detail: TeamDetail] }>();
 const chat = useChatStore();
 const saving = ref(false);
 
-// Build a unified list: profiles first, then raw agents that have no profile
 const displayItems = computed(() => {
   const items: { profileId: string; label: string; icon: string; color: string; description: string }[] = [];
-  const coveredAgentIds = new Set<string>();
   for (const p of chat.profiles) {
     items.push({ profileId: p.id, label: p.name, icon: p.icon || "sparkle", color: p.color || "#b8852a", description: p.desc || "" });
-    if (p.default_agent_id) coveredAgentIds.add(p.default_agent_id);
   }
   return items;
 });

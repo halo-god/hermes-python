@@ -15,7 +15,7 @@ const ICONS = ["cube", "sparkle", "target", "chart2", "doc", "globe", "compass",
 
 const form = reactive({
   name: "", handle: "", color: COLORS[0], icon: ICONS[0], tagline: "",
-  plan: "team", sharedAgents: ["hermes", "cowork"] as string[], visibility: "invite", emails: "",
+  plan: "team", sharedAgents: [] as string[], visibility: "invite", emails: "",
 });
 let handleEdited = false as boolean;
 watch(() => form.name, (v) => {
@@ -96,10 +96,10 @@ async function submit() {
     <div class="np-field">
       <label class="np-label">共享助手 <span class="np-hint">团队成员都可使用 · 已选 {{ form.sharedAgents.length }}</span></label>
       <div class="np-agents">
-        <button v-for="p in chat.profiles.filter((pp) => pp.is_active).filter((pp, i, arr) => arr.findIndex((x) => x.default_agent_id === pp.default_agent_id) === i).slice(0, 8)" :key="p.default_agent_id" class="np-agent" :class="{ on: form.sharedAgents.includes(p.default_agent_id) }" @click="toggleAgent(p.default_agent_id)">
+        <button v-for="p in chat.profiles.filter((pp) => pp.is_active)" :key="p.id" class="np-agent" :class="{ on: form.sharedAgents.includes(p.id) }" @click="toggleAgent(p.id)">
           <span class="np-agent-ico" :style="{ background: p.color || '#b8852a' }"><Icon :name="p.icon || 'sparkle'" /></span>
           <span class="np-agent-nm">{{ p.name }}</span>
-          <span v-if="form.sharedAgents.includes(p.default_agent_id)" class="np-agent-check"><Icon name="check" :size="9" /></span>
+          <span v-if="form.sharedAgents.includes(p.id)" class="np-agent-check"><Icon name="check" :size="9" /></span>
         </button>
       </div>
     </div>
