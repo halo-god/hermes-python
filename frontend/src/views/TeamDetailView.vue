@@ -19,6 +19,7 @@ import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { useNotificationStore } from "@/stores/notifications";
 import { renderMarkdown } from "@/utils/markdown";
+import { usePresence } from "@/composables/usePresence";
 import type { ConfirmationRequest, FileItem, Member, Project, TeamDetail, TeamPolicy, WsAdapter } from "@/types";
 
 const route = useRoute();
@@ -26,6 +27,7 @@ const router = useRouter();
 const chat = useChatStore();
 const auth = useAuthStore();
 const ns = useNotificationStore();
+const { queryPresence, getStatus } = usePresence();
 const teamId = computed(() => route.params.id as string);
 const showNewProject = ref(false);
 const editingProject = ref<Project | null>(null);
@@ -104,6 +106,9 @@ async function load() {
     Object.entries(pol.policy).forEach(([pid, roles]) => (policyMap[pid] = { ...roles }));
   }
   if (!chat.profiles.length) chat.loadProfiles();
+  // Query online/offline presence for team members
+  const memberIds = d.members?.map((m: Member) => m.user_id) || [];
+  if (memberIds.length) queryPresence(memberIds);
 }
 
 const knowledgeFiles = computed<FileItem[]>(() =>
@@ -443,7 +448,7 @@ const team = computed(() => {
     stats: d?.stats || { members: members.value.length, agents: 1, threads: 0, knowledge: 0 },
     members: members.value.map((m): {
       handle: string; name: string; initials: string; color: string;
-      role: string; roleKey: string; status: string; last: string;
+      role: string; roleKey: string; status: string; last: string; user_id: string;
     } => ({
       handle: m.email || m.user_id,
       name: m.name || "未命名",
@@ -453,6 +458,7 @@ const team = computed(() => {
       roleKey: m.role,
       status: m.status || "offline",
       last: "—",
+      user_id: m.user_id,
     })),
     sharedAgents: (d?.shared_agents || ["hermes"]) as string[],
     pinned: (d?.pinned || []) as { id: string; title: string; primary_agent_id: string; updated_at: string }[],
@@ -704,7 +710,7 @@ async function deleteTeam() {
               </div>
               <div class="section-body">
                 <div v-for="m in team.members.slice(0, 6)" :key="m.handle" class="row-item">
-                  <div class="mem-avatar" :style="{ background: m.color }">{{ m.initials }}<span class="status" :class="m.status"></span></div>
+                  <div class="mem-avatar" :style="{ background: m.color }">{{ m.initials }}<span class="status" :class="m.status"></span><span class="presence-dot" :class="getStatus(m.user_id)"></span></div>
                   <div class="row-text">
                     <div class="row-title">{{ m.name }} <span style="color: var(--ink-mute); font-weight: 400; font-size: 11.5px; margin-left: 4px">@{{ m.handle }}</span></div>
                     <div class="row-sub">{{ m.last }}</div>
@@ -783,7 +789,7 @@ async function deleteTeam() {
           <div class="table-row head"><div>成员</div><div>角色</div><div>状态</div><div class="col-last-active">最近活动</div><div></div></div>
           <div v-for="m in team.members" :key="m.handle" class="table-row">
             <div class="mem-cell">
-              <div class="mem-avatar" :style="{ background: m.color }">{{ m.initials }}<span class="status" :class="m.status"></span></div>
+              <div class="mem-avatar" :style="{ background: m.color }">{{ m.initials }}<span class="status" :class="m.status"></span><span class="presence-dot" :class="getStatus(m.user_id)"></span></div>
               <div style="min-width: 0"><div class="nm">{{ m.name }}</div><div class="hd">@{{ m.handle }}</div></div>
             </div>
             <div><span class="mem-role" :class="roleClass(m.role)">{{ m.role }}</span></div>

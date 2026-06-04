@@ -10,8 +10,10 @@ import SearchPalette from "@/components/SearchPalette.vue";
 import NotificationPanel from "@/components/NotificationPanel.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
 import { useChatStore } from "@/stores/chat";
+import { usePresence } from "@/composables/usePresence";
 
 const chat = useChatStore();
+const { startHeartbeat, stopHeartbeat } = usePresence();
 const collapsed = ref(false);
 const showTweaks = ref(false);
 const showSearch = ref(false);
@@ -41,10 +43,12 @@ onMounted(() => {
   chat.loadProfiles();
   chat.loadTeams();
   chat.loadConfig();
+  startHeartbeat();
   window.addEventListener("keydown", onKey);
   window.addEventListener("hermes:search", openSearch);
 });
 onBeforeUnmount(() => {
+  stopHeartbeat();
   window.removeEventListener("keydown", onKey);
   window.removeEventListener("hermes:search", openSearch);
 });

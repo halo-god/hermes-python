@@ -888,6 +888,16 @@
   .mem-avatar .status.online { background: var(--ok); }
   .mem-avatar .status.idle   { background: #d9a843; }
   .mem-avatar .status.offline{ background: var(--ink-faint); }
+  .mem-avatar .presence-dot {
+    position: absolute;
+    left: -1px; bottom: -1px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--ink-faint);
+    border: 2px solid var(--bg-panel);
+  }
+  .mem-avatar .presence-dot.online { background: #22c55e; }
+  .mem-avatar .presence-dot.offline { background: var(--ink-faint); }
   .mem-role {
     font-size: 10.5px;
     color: var(--ink-mute);

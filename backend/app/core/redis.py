@@ -116,3 +116,25 @@ async def respond_to_confirmation(conversation_id: str, request_id: str, choice:
     await get_redis().set(key, _json.dumps({"choice": choice}), ex=300)
     # Notify waiters via pub/sub
     await get_redis().publish(f"confirm_notify:{conversation_id}", request_id)
+
+
+# ── User presence (online/offline) ──
+_PRESENCE_PREFIX = "presence:"
+_PRESENCE_TTL = 60  # seconds; heartbeat every 30s keeps it alive
+
+
+async def presence_heartbeat(user_id: str) -> None:
+    """Refresh user's online presence. Call every ~30s from frontend."""
+    await get_redis().set(f"{_PRESENCE_PREFIX}{user_id}", "online", ex=_PRESENCE_TTL)
+
+
+async def presence_status(user_ids: list[str]) -> dict[str, str]:
+    """Batch query presence for multiple users. Returns {user_id: 'online'|'offline'}."""
+    if not user_ids:
+        return {}
+    r = get_redis()
+    pipe = r.pipeline()
+    for uid in user_ids:
+        pipe.exists(f"{_PRESENCE_PREFIX}{uid}")
+    results = await pipe.execute()
+    return {uid: "online" if exists else "offline" for uid, exists in zip(user_ids, results)}
