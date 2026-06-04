@@ -39,6 +39,10 @@ const chosenMap = ref<Record<string, boolean>>({});
 
 onMounted(async () => {
   if (!chat.profiles.length) await chat.loadProfiles();
+  // Request browser notification permission
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
   // Set landing profile from first available profile
   if (chat.profiles.length) {
     const firstProfile = chat.profiles.find((p) => p.is_active && p.default_agent_id);
@@ -164,6 +168,14 @@ async function scrollDown() {
 }
 watch(() => chat.messages.map((m) => m.content.text).join("|"), scrollDown);
 watch(() => chat.activeId, scrollDown);
+
+// ── Route query watcher: handle ?c= changes while already in ChatView ──
+watch(() => route.query.c as string | undefined, async (cid) => {
+  if (cid && cid !== chat.activeId) {
+    await chat.openConversation(cid);
+    await scrollDown();
+  }
+});
 
 // ── Virtual scroll for message list ──
 const virtualizerContainer = ref<HTMLElement | null>(null);
@@ -343,7 +355,12 @@ async function forkFrom(msgId: string) {
   try {
     const forked = await conversationsApi.fork(chat.activeId, msgId);
     await chat.loadConversations();
-    router.push({ query: { c: forked.id } });
+    // 直接打开新会话，不依赖路由（ChatView 已 mounted，query 变化不会触发 onMounted）
+    await chat.openConversation(forked.id);
+    await scrollDown();
+    nextTick(() => {
+      (document.querySelector(".dock .composer-input") as HTMLTextAreaElement)?.focus();
+    });
   } catch {
     ns.toast("分叉失败", "error");
   }

@@ -5,6 +5,7 @@ import { agentsApi } from "@/api/agents";
 import { teamsApi } from "@/api/teams";
 import { tokenStore } from "@/api/client";
 import { useStream } from "@/composables/useStream";
+import { useNotificationStore } from "@/stores/notifications";
 import type { Conversation, Message, Team, WorkspaceFile, ConfirmationRequest } from "@/types";
 import type { Profile } from "@/api/agents";
 
@@ -297,6 +298,12 @@ export const useChatStore = defineStore("chat", () => {
 
     stream.on("confirmation_request", (ev) => {
       pendingConfirmations.value.push(ev.request);
+      // Notify user
+      const ns = useNotificationStore();
+      ns.push({ title: "需要确认", body: ev.request.question || "AI 需要你的确认", kind: "warn" });
+      if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+        new Notification("Hermes · 需要确认", { body: ev.request.question || "AI 需要你的确认", tag: "hermes-confirm" });
+      }
     });
 
     stream.on("confirmation_response", (ev) => {
@@ -312,6 +319,16 @@ export const useChatStore = defineStore("chat", () => {
         if (ev.text !== undefined) m.content = { ...m.content, text: ev.text };
         if (m.content.merged && m.content.merged.status === "streaming") {
           m.content.merged.status = "complete";
+        }
+      }
+      // Notify if user is not viewing this conversation
+      if (document.hidden || !activeId.value) {
+        const ns = useNotificationStore();
+        const text = (ev.text || m?.content?.text || "").slice(0, 80);
+        ns.push({ title: "AI 回复完成", body: text || "点击查看", kind: "success", link: `/?c=${activeId.value}` });
+        // Browser notification
+        if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+          new Notification("Hermes · AI 回复完成", { body: text || "点击查看", tag: "hermes-done" });
         }
       }
       scheduleRefresh();  // Delayed: cancel if a new "start" event follows

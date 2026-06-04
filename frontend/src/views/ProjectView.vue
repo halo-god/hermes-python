@@ -5,6 +5,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
+import NewProjectModal from "@/components/NewProjectModal.vue";
 import { projectsApi } from "@/api/projects";
 import { teamsApi } from "@/api/teams";
 import { agentsApi } from "@/api/agents";
@@ -26,6 +27,7 @@ const editingTaskId = ref<string | null>(null);
 const editDraft = ref("");
 const newTaskTitle = ref("");
 const menuOpen = ref(false);
+const editingProject = ref(false);
 
 const STATUS_NEXT: Record<string, string> = { todo: "doing", doing: "done", done: "todo" };
 const STATUS_LABEL: Record<string, string> = { todo: "待办", doing: "进行中", done: "已完成" };
@@ -141,6 +143,14 @@ async function archiveProject() {
   await load();
   menuOpen.value = false;
 }
+function openEditProject() {
+  editingProject.value = true;
+  menuOpen.value = false;
+}
+function onProjectUpdated() {
+  editingProject.value = false;
+  load();
+}
 async function removeProject() {
   if (!project.value) return;
   if (!confirm(`删除项目「${project.value.name}」？`)) return;
@@ -170,6 +180,7 @@ async function removeProject() {
           <div style="position: relative">
             <button class="icon-btn" @click.stop="menuOpen = !menuOpen"><Icon name="settings" /></button>
             <div v-if="menuOpen" class="menu" style="top: 34px; right: 0; min-width: 170px" @click.stop>
+              <button class="menu-item" @click="openEditProject"><Icon name="edit" /> <span class="m-name">编辑项目</span></button>
               <button class="menu-item" @click="archiveProject"><Icon name="pin" /> <span class="m-name">{{ project.status === "active" ? "归档项目" : "重新启用" }}</span></button>
               <div class="menu-sep"></div>
               <button class="menu-item danger" @click="removeProject"><Icon name="close" /> <span class="m-name">删除项目</span></button>
@@ -296,4 +307,14 @@ async function removeProject() {
       </div>
     </div>
   </div>
+
+  <NewProjectModal
+    v-if="editingProject && project"
+    :team-id="project.team_id"
+    :team-name="teamName"
+    :members="members"
+    :project="project"
+    @close="editingProject = false"
+    @updated="onProjectUpdated"
+  />
 </template>

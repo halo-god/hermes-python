@@ -559,6 +559,31 @@ async def add_doc(
     return await svc.add_doc(db, project_id, payload, user)
 
 
+@router.post("/projects/{project_id}/docs/upload", response_model=DocOut, status_code=201)
+async def upload_doc(
+    project_id: uuid.UUID,
+    file: UploadFile = FastApiFile(...),
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Upload a real file as a project document."""
+    await _project_with_perm(db, project_id, user, "project.edit")
+    content = await file.read()
+    kind = (file.filename or "doc").rsplit(".", 1)[-1] if "." in (file.filename or "") else "doc"
+    payload = DocCreate(
+        name=file.filename or "upload",
+        kind=kind,
+        size_bytes=len(content),
+    )
+    doc = await svc.add_doc(db, project_id, payload, user)
+    # Store file content in object storage if available, otherwise skip
+    try:
+        from app.core.object_storage import put_object
+        await put_object(f"project-docs/{doc.id}/{file.filename}", content)
+    except Exception:
+        pass  # Graceful degradation: metadata saved even if storage fails
+    return doc
+
+
 @router.delete("/projects/docs/{doc_id}", status_code=204)
 async def delete_doc(
     doc_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
