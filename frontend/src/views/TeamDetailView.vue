@@ -19,7 +19,7 @@ import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { useNotificationStore } from "@/stores/notifications";
 import { renderMarkdown } from "@/utils/markdown";
-import type { Agent, FileItem, Member, Project, TeamDetail, TeamPolicy, WsAdapter } from "@/types";
+import type { Agent, ConfirmationRequest, FileItem, Member, Project, TeamDetail, TeamPolicy, WsAdapter } from "@/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -157,6 +157,7 @@ const channelPollTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const channelAttachments = ref<{ id: string; name: string }[]>([]);
 const showKnowledgePicker = ref(false);
 const chCardMsg = ref<Message | null>(null);
+const pendingChannelConfirmations = ref<ConfirmationRequest[]>([]);
 const chCardPos = ref({ x: 0, y: 0 });
 const channelTa = ref<HTMLTextAreaElement | null>(null);
 const mentionQuery = ref("");
@@ -200,17 +201,34 @@ async function refreshChannelMessages() {
   } catch { /* ignore */ }
 }
 
-function applyChannelEvent(ev: { type: string; message_id?: string; delta?: string; text?: string }) {
+function applyChannelEvent(ev: { type: string; message_id?: string; delta?: string; text?: string; request?: ConfirmationRequest; request_id?: string; choice?: string }) {
   const target = ev.message_id
     ? channelMessages.value.find((m) => m.id === ev.message_id)
     : channelMessages.value[channelMessages.value.length - 1];
   if (!target || (target.role !== "agent" && target.role !== "roundtable")) return;
   if (ev.type === "token" && ev.delta) {
     target.content = { ...target.content, text: (target.content.text || "") + ev.delta };
+  } else if (ev.type === "tool_call") {
+    // Show tool call steps in the message
+    const steps = (target.content.steps || []) as { title: string; status: string }[];
+    steps.push({ title: (ev as any).title || "", status: (ev as any).status || "" });
+    target.content = { ...target.content, steps };
+  } else if (ev.type === "confirmation_request" && ev.request) {
+    pendingChannelConfirmations.value.push(ev.request);
+  } else if (ev.type === "confirmation_response" && ev.request_id) {
+    pendingChannelConfirmations.value = pendingChannelConfirmations.value.filter(
+      (r) => r.id !== ev.request_id,
+    );
   } else if (ev.type === "done") {
     if (ev.text !== undefined) target.content = { ...target.content, text: ev.text };
     target.status = "complete";
   }
+}
+
+async function respondChannelConfirmation(requestId: string, choice: string) {
+  if (!channelConvo.value) return;
+  pendingChannelConfirmations.value = pendingChannelConfirmations.value.filter((r) => r.id !== requestId);
+  try { await conversationsApi.confirm(channelConvo.value.id, requestId, choice); } catch { /* ok */ }
 }
 
 async function loadChannel() {
@@ -306,7 +324,16 @@ async function sendChannelMessage() {
     if (channelScroller.value) channelScroller.value.scrollTop = channelScroller.value.scrollHeight;
   } finally {
     channelSending.value = false;
-    setTimeout(() => { if (channelEsRef.value === es) { es.close(); channelEsRef.value = null; } }, 4000);
+    // Keep SSE open while confirmation modals are pending
+    const closeSse = () => {
+      if (channelEsRef.value === es && !pendingChannelConfirmations.value.length) {
+        es.close();
+        channelEsRef.value = null;
+      }
+    };
+    setTimeout(closeSse, 4000);
+    // Also close when last confirmation is resolved
+    watch(pendingChannelConfirmations, (val) => { if (!val.length) closeSse(); }, { deep: true });
   }
 }
 
@@ -1065,6 +1092,12 @@ async function deleteTeam() {
       :danger="confirmAction.danger"
       @close="confirmAction = null"
       @confirm="confirmAction.onConfirm()"
+    />
+    <ConfirmModal
+      v-if="pendingChannelConfirmations.length"
+      :request="pendingChannelConfirmations[0]"
+      @close="respondChannelConfirmation(pendingChannelConfirmations[0].id, '跳过')"
+      @respond="(choice) => respondChannelConfirmation(pendingChannelConfirmations[0].id, choice)"
     />
     <WorkspacePanel
       v-if="showKnowledgePanel && knowledgeFiles.length"
