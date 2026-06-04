@@ -52,6 +52,30 @@ def _val(entry, attr: str) -> str | None:
     return None
 
 
+def _first_ou_from_dn(dn: str) -> str | None:
+    """Extract the first OU from a DN string.
+
+    e.g. 'CN=曹庭辉,OU=IT信息管理办,OU=总裁办,DC=example,DC=com'
+         → 'IT信息管理办'
+    """
+    import re
+    m = re.search(r"OU=([^,]+)", dn, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _groups_from_entry(entry) -> list[str]:
+    """Read memberOf attribute and return list of group CNs."""
+    try:
+        if entry is not None and "memberOf" in entry:
+            raw = entry["memberOf"].value
+            if isinstance(raw, list):
+                return [str(g) for g in raw]
+            return [str(raw)] if raw else []
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
 class LDAPProvider:
     def __init__(self, connection_factory: ConnectionFactory | None = None) -> None:
         self._factory = connection_factory or _real_connection
@@ -165,7 +189,7 @@ class LDAPProvider:
                 raise ProviderError("LDAP 服务账号绑定失败，请联系管理员")
             svc_conn.search(
                 base_dn, search_filter, search_scope=SUBTREE,
-                attributes=[attr_email, attr_name, attr_dept],
+                attributes=[attr_email, attr_name, attr_dept, "memberOf"],
             )
             if not svc_conn.entries:
                 raise ProviderError(f"未找到用户：{raw_username}")
@@ -173,7 +197,8 @@ class LDAPProvider:
             user_dn = entry.entry_dn
             email_val = _val(entry, attr_email)
             name_val = _val(entry, attr_name)
-            dept_val = _val(entry, attr_dept)
+            dept_val = _val(entry, attr_dept) or _first_ou_from_dn(user_dn)
+            groups = _groups_from_entry(entry)
         finally:
             try:
                 svc_conn.unbind()
@@ -194,5 +219,6 @@ class LDAPProvider:
         email = email_val or f"{raw_username}@{config.get('email_domain', 'ldap.local')}"
         return IdentityInfo(
             external_id=user_dn, email=email.lower(),
-            name=name_val or raw_username, department=dept_val, source="ldap",
+            name=name_val or raw_username, department=dept_val,
+            source="ldap", groups=groups,
         )
