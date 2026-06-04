@@ -731,7 +731,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                   <div v-else-if="chat.messages[row.index].role === 'agent'" class="md-body" v-html="mdSearch(chat.messages[row.index].content.text)" />
                   <template v-else>
                     <div v-if="displayText(chat.messages[row.index].content.text)" class="md-body" v-html="displayHtml(chat.messages[row.index].content.text)"></div>
-                    <div v-if="extractKnowledgeRefs(chat.messages[row.index].content.text).length" class="knowledge-refs-badge">
+                    <div v-if="displayText(chat.messages[row.index].content.text) && extractKnowledgeRefs(chat.messages[row.index].content.text).length" class="knowledge-refs-badge">
                       <Icon name="doc" :size="11" /> 引用了知识库: {{ extractKnowledgeRefs(chat.messages[row.index].content.text).join(', ') }}
                     </div>
                     <div v-if="!displayText(chat.messages[row.index].content.text) && extractKnowledgeRefs(chat.messages[row.index].content.text).length" class="knowledge-refs-badge standalone">

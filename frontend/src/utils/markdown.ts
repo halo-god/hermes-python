@@ -107,7 +107,7 @@ function postProcessBlockquotes(html: string): string {
     const textContent = inner.replace(/<[^>]+>/g, "").trim();
     const lines = textContent.split("\n").filter((l: string) => l.trim());
     const firstLine = (lines[0] || "").slice(0, 60);
-    if (textContent.length > 120) {
+    if (lines.length > 1 || textContent.length > 60) {
       return `<details class="quote-collapsible"><summary class="quote-summary">💬 ${md.utils.escapeHtml(firstLine)}${lines.length > 1 ? "…" : ""}</summary><blockquote class="expanded-quote">${inner}</blockquote></details>`;
     }
     return `<blockquote class="simple-quote">${inner}</blockquote>`;
