@@ -14,8 +14,9 @@ import { useNotificationStore } from "@/stores/notifications";
 import { conversationsApi } from "@/api/conversations";
 import { teamsApi } from "@/api/teams";
 import { renderMarkdown, renderMarkdownAsync } from "@/utils/markdown";
-import type { Agent, Knowledge, WsAdapter } from "@/types";
+import type { Knowledge, WsAdapter } from "@/types";
 import type { SendOptions } from "@/components/Composer.vue";
+import type { Profile } from "@/api/agents";
 
 // Lazy-load heavy components (split from main bundle)
 const WorkspacePanel = defineAsyncComponent(() => import("@/components/WorkspacePanel.vue"));
@@ -33,20 +34,20 @@ const showWorkspace = ref(false);
 const showAgentMenu = ref(false);
 const showExtractModal = ref(false);
 const agentTab = ref("全部");
-const landingAgentId = ref("hermes");
+const landingProfileId = ref<string>("");
 const teamKnowledge = ref<Knowledge[]>([]);
 // roundtable per-reply chosen state (keyed by messageId:slot)
 const chosenMap = ref<Record<string, boolean>>({});
 
-const AGENT_TABS = ["全部", "官方", "协作", "办公", "创作"];
+const AGENT_TABS = ["全部", "global", "personal", "team"];
 
 onMounted(async () => {
   if (!chat.agents.length) await chat.loadAgents();
   if (!chat.profiles.length) await chat.loadProfiles();
-  // Set landing agent from first available profile
+  // Set landing profile from first available profile
   if (chat.profiles.length) {
     const firstProfile = chat.profiles.find((p) => p.is_active && p.default_agent_id);
-    if (firstProfile?.default_agent_id) landingAgentId.value = firstProfile.default_agent_id;
+    if (firstProfile) landingProfileId.value = firstProfile.id;
   }
   const cid = route.query.c as string | undefined;
   const teamCtx = route.query.team as string | undefined;
@@ -56,7 +57,8 @@ onMounted(async () => {
     await chat.openConversation(cid);
     await scrollDown();
   } else if (teamCtx || projCtx) {
-    const d = await conversationsApi.create({ primary_agent_id: landingAgentId.value, team_id: teamCtx, project_id: projCtx, first_message: seed });
+    const landingAgentId = landingProfile.value?.default_agent_id || "hermes";
+    const d = await conversationsApi.create({ primary_agent_id: landingAgentId, profile_id: landingProfileId.value, team_id: teamCtx, project_id: projCtx, first_message: seed });
     await chat.loadConversations();
     await chat.openConversation(d.id);
     if (seed) draft.value = seed;
@@ -97,21 +99,22 @@ const greeting = computed(() => {
   let voice = "warm";
   try { voice = JSON.parse(localStorage.getItem("hermes.tweaks") || "{}").voice || "warm"; } catch { /* noop */ }
   if (voice === "classical") return { main: "凡所欲遣，<em>皆可托信使</em>。", sub: "Quidquid mittere vis, mihi crede." };
-  if (voice === "engineering") return { main: `> <em>hermes</em> ready —`, sub: `agents: ${chat.activeAgents.length} active · model: ACP · uptime: 99.9%` };
+  if (voice === "engineering") return { main: `> <em>hermes</em> ready —`, sub: `agents: ${chat.activeProfiles.length} active · model: ACP · uptime: 99.9%` };
   return { main: `${timePart}，<em>今天有什么安排？</em>`, sub: "Ask me anything · 我会调度合适的助手为你完成。" };
 });
 
-// ── Agent tab filtering ──
-const filteredAgents = computed(() => {
-  if (agentTab.value === "全部") return chat.agents;
-  if (agentTab.value === "官方") return chat.agents.filter((a) => a.official);
-  return chat.agents.filter((a) => a.kind === agentTab.value);
+// ── Profile tab filtering ──
+const filteredProfiles = computed(() => {
+  if (agentTab.value === "全部") return chat.profiles.filter((p) => p.is_active);
+  return chat.profiles.filter((p) => p.is_active && p.scope === agentTab.value);
 });
 
-const hermes = computed(() => chat.agents.find((a) => a.id === "hermes"));
-const landingAgent = computed(() => agentById(landingAgentId.value) || hermes.value);
+const landingProfile = computed(() => chat.profiles.find((p) => p.id === landingProfileId.value) || chat.profiles.find((p) => p.is_active) || null);
 const activeConvo = computed(() => chat.conversations.find((c) => c.id === chat.activeId));
-const primaryAgent = computed(() => agentById(activeConvo.value?.primary_agent_id || "hermes") || hermes.value);
+const primaryProfile = computed(() => {
+  const aid = activeConvo.value?.primary_agent_id;
+  return aid ? chat.profiles.find((p) => p.default_agent_id === aid) || null : landingProfile.value;
+});
 
 // Load team knowledge when the active conversation has a team_id
 watch(
@@ -135,16 +138,13 @@ const convoProjectName = computed(() => {
   return (activeConvo.value as any)?.project_name || null;
 });
 
-function agentById(id: string): Agent | undefined {
-  return chat.agents.find((a) => a.id === id);
+function profileByAgentId(agentId: string): Profile | undefined {
+  return chat.profiles.find((p) => p.default_agent_id === agentId);
 }
 
-// Return display info for an agent, preferring profile data over raw agent metadata.
-function agentDisplay(id: string): { label: string; icon: string; color: string; description: string } {
-  const profile = chat.profiles.find((p) => p.default_agent_id === id || p.handle === id);
-  if (profile) return { label: profile.name, icon: profile.icon || "sparkle", color: profile.color || "#b8852a", description: profile.desc || "" };
-  const raw = agentById(id);
-  return { label: raw?.label || id, icon: raw?.icon || "sparkle", color: raw?.color || "#b8852a", description: raw?.description || "" };
+// Display info from profile
+function profileDisplay(profile: Profile | null | undefined): { label: string; icon: string; color: string; description: string } {
+  return { label: profile?.name || "Hermes", icon: profile?.icon || "sparkle", color: profile?.color || "#b8852a", description: profile?.desc || "" };
 }
 
 function md(text: string) {
@@ -169,18 +169,12 @@ watch(() => chat.messages.length, async () => {
   }
 });
 
-// Profiles available to add to the roundtable (each maps to a unique agent).
+// Profiles available to add to the roundtable.
 const availableToAdd = computed(() => {
-  const activeProfileAgentIds = new Set(chat.activeAgents);
-  // Prefer profiles for the picker; fall back to raw agents that have no profile.
-  const profileItems = chat.profiles
-    .filter((p) => p.is_active && p.default_agent_id && !activeProfileAgentIds.has(p.default_agent_id))
-    .map((p) => ({ id: p.default_agent_id, label: p.name, icon: p.icon || "sparkle", color: p.color || "#b8852a", description: p.desc || "" }));
-  const profileAgentIds = new Set(profileItems.map((p) => p.id));
-  const rawItems = chat.agents
-    .filter((a) => a.available && !activeProfileAgentIds.has(a.id) && !profileAgentIds.has(a.id))
-    .map((a) => ({ id: a.id, label: a.label, icon: a.icon || "sparkle", color: a.color || "#b8852a", description: a.description || "" }));
-  return [...profileItems, ...rawItems];
+  const activeAgentIds = new Set(chat.activeAgents);
+  return chat.profiles
+    .filter((p) => p.is_active && p.default_agent_id && !activeAgentIds.has(p.default_agent_id))
+    .map((p) => ({ id: p.id, label: p.name, icon: p.icon || "sparkle", color: p.color || "#b8852a", description: p.desc || "" }));
 });
 
 async function scrollDown() {
@@ -252,7 +246,7 @@ async function onSend(opts?: SendOptions) {
       console.log('[onSend] final text length:', text.length);
     }
   }
-  await chat.send(text, landingAgentId.value, opts);
+  await chat.send(text, landingProfile.value?.default_agent_id || "hermes", opts);
   await scrollDown();
 }
 
@@ -260,8 +254,8 @@ function openFile(fid: string) {
   openFileId.value = fid;
   showWorkspace.value = true;
 }
-function pickAgent(a: Agent) {
-  landingAgentId.value = a.id;
+function pickProfile(p: Profile) {
+  landingProfileId.value = p.id;
 }
 
 // ── Message actions ──
@@ -287,8 +281,9 @@ function isChosen(msgId: string, slot: number): boolean {
   return !!chosenMap.value[`${msgId}:${slot}`];
 }
 function followUp(agentId: string) {
-  // set agent as primary and focus the composer
-  landingAgentId.value = agentId;
+  // Find profile by agent ID and set as landing
+  const profile = profileByAgentId(agentId);
+  if (profile) landingProfileId.value = profile.id;
   (document.querySelector(".dock .composer-input") as HTMLTextAreaElement)?.focus();
 }
 
@@ -313,11 +308,11 @@ const wsAdapter = computed<WsAdapter>(() => {
         <h1 class="hello" v-html="greeting.main"></h1>
         <div class="hello-sub">{{ greeting.sub }}</div>
 
-        <!-- agent switcher -->
+        <!-- profile switcher -->
         <div class="agent-bar">
           <button class="agent-chip active">
-            <span class="avatar" :style="{ background: landingAgent?.color || '#b8852a' }"><Icon :name="landingAgent?.icon || 'brand'" :size="11" /></span>
-            {{ landingAgent?.label || "Hermes" }}
+            <span class="avatar" :style="{ background: landingProfile?.color || '#b8852a' }"><Icon :name="landingProfile?.icon || 'brand'" :size="11" /></span>
+            {{ landingProfile?.name || "Hermes" }}
           </button>
           <span class="agent-divider"></span>
           <button class="agent-add" title="添加助手" @click="showAgentMenu = !showAgentMenu"><Icon name="plus" :size="14" /></button>
@@ -325,31 +320,31 @@ const wsAdapter = computed<WsAdapter>(() => {
 
         <Composer
           v-model="draft"
-          :placeholder="`给 ${landingAgent?.label || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
-          :agent="{ label: landingAgent?.label, color: landingAgent?.color, model: landingAgent?.version || 'ACP' }"
+          :placeholder="`给 ${landingProfile?.name || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
+          :agent="{ label: landingProfile?.name, color: landingProfile?.color, model: landingProfile?.default_model || 'ACP' }"
           :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
           @cancel="chat.cancel()"
         />
 
-        <!-- agents grid -->
+        <!-- profiles grid -->
         <div class="agents-section">
           <div class="agents-head">
             <div class="agents-title">选择一位助手开始任务</div>
             <div class="agents-tabs">
-              <button v-for="t in AGENT_TABS" :key="t" class="agents-tab" :class="{ active: t === agentTab }" @click="agentTab = t">{{ t }}</button>
+              <button v-for="t in AGENT_TABS" :key="t" class="agents-tab" :class="{ active: t === agentTab }" @click="agentTab = t">{{ t === 'global' ? '全局' : t === 'personal' ? '个人' : t === 'team' ? '团队' : t }}</button>
             </div>
           </div>
           <div class="agents-grid">
-            <button v-for="a in filteredAgents" :key="a.id" class="agent-card" @click="pickAgent(a)">
-              <div class="agent-icon" :style="{ background: a.color || '#b8852a' }"><Icon :name="a.icon || 'sparkle'" :size="16" /></div>
+            <button v-for="p in filteredProfiles" :key="p.id" class="agent-card" @click="pickProfile(p)">
+              <div class="agent-icon" :style="{ background: p.color || '#b8852a' }"><Icon :name="p.icon || 'sparkle'" :size="16" /></div>
               <div class="agent-meta">
-                <div class="agent-name">{{ a.label }}<span v-if="a.official" class="official">OFFICIAL</span></div>
-                <div class="agent-desc">{{ a.description }}</div>
+                <div class="agent-name">{{ p.name }}<span v-if="p.scope === 'global'" class="official">GLOBAL</span></div>
+                <div class="agent-desc">{{ p.desc }}</div>
               </div>
             </button>
-            <div v-if="!filteredAgents.length" style="grid-column:1/-1;color:var(--ink-mute);font-size:13px;padding:16px 0;">
+            <div v-if="!filteredProfiles.length" style="grid-column:1/-1;color:var(--ink-mute);font-size:13px;padding:16px 0;">
               暂无该分类的助手
             </div>
           </div>
@@ -367,9 +362,9 @@ const wsAdapter = computed<WsAdapter>(() => {
               <div style="min-width:0;">
                 <h2 class="thread-title">{{ activeConvo?.title || "对话" }}</h2>
                 <div class="thread-meta" style="margin-top:5px;">
-                  <span class="agent-tag"><Icon :name="primaryAgent?.icon || 'brand'" :size="10" /> {{ primaryAgent?.label || "Hermes" }}</span>
-                  <span v-if="chat.activeAgents.length > 1" class="agent-tag" style="background:rgba(184,133,42,0.14);color:var(--accent-deep);">
-                    <Icon name="sparkle" :size="10" /> 圆桌 · {{ chat.activeAgents.length }} 位并行
+                  <span class="agent-tag"><Icon :name="primaryProfile?.icon || 'brand'" :size="10" /> {{ primaryProfile?.name || "Hermes" }}</span>
+                  <span v-if="chat.activeProfiles.length > 1" class="agent-tag" style="background:rgba(184,133,42,0.14);color:var(--accent-deep);">
+                    <Icon name="sparkle" :size="10" /> 圆桌 · {{ chat.activeProfiles.length }} 位并行
                   </span>
                   <span v-if="convoTeamName" class="agent-tag" style="background:rgba(58,109,161,0.12);color:#3a6da1;">
                     <Icon name="user" :size="10" /> {{ convoTeamName }}
@@ -388,19 +383,19 @@ const wsAdapter = computed<WsAdapter>(() => {
             </button>
           </div>
 
-          <!-- agent switcher -->
+          <!-- profile switcher -->
           <div class="agent-bar" style="align-self: flex-start">
-            <button v-for="aid in chat.activeAgents" :key="aid" class="agent-chip" :class="{ active: aid === activeConvo?.primary_agent_id }">
-              <span class="avatar" :style="{ background: agentDisplay(aid).color }"><Icon :name="agentDisplay(aid).icon" :size="11" /></span>
-              {{ agentDisplay(aid).label }}
-              <span v-if="aid !== 'hermes'" style="margin-left:4px;cursor:pointer;color:var(--ink-mute);" @click.stop="chat.toggleAgent(aid)">×</span>
+            <button v-for="p in chat.activeProfiles" :key="p.id" class="agent-chip" :class="{ active: p.default_agent_id === activeConvo?.primary_agent_id }">
+              <span class="avatar" :style="{ background: p.color || '#b8852a' }"><Icon :name="p.icon || 'sparkle'" :size="11" /></span>
+              {{ p.name }}
+              <span v-if="p.default_agent_id !== 'hermes'" style="margin-left:4px;cursor:pointer;color:var(--ink-mute);" @click.stop="chat.toggleProfile(p.id)">×</span>
             </button>
             <span class="agent-divider"></span>
             <div style="position: relative">
               <button class="agent-add" title="添加助手" @click="showAgentMenu = !showAgentMenu"><Icon name="plus" :size="14" /></button>
               <div v-if="showAgentMenu" class="menu" style="top: 32px; left: 0; min-width: 240px">
                 <div class="menu-label">添加助手（圆桌）</div>
-                <button v-for="a in availableToAdd" :key="a.id" class="menu-item" @click="chat.toggleAgent(a.id); showAgentMenu = false">
+                <button v-for="a in availableToAdd" :key="a.id" class="menu-item" @click="chat.toggleProfile(a.id); showAgentMenu = false">
                   <Icon :name="a.icon" :style="{ color: a.color }" />
                   <span class="m-name">{{ a.label }}</span><span class="m-tag">{{ a.description }}</span>
                 </button>
@@ -431,9 +426,9 @@ const wsAdapter = computed<WsAdapter>(() => {
               <div class="roundtable-label">圆桌 · {{ chat.messages[row.index].content.replies?.length || 0 }} 位助手并行作答</div>
               <div v-for="(r, idx) in chat.messages[row.index].content.replies" :key="idx" class="rt-card">
                 <div class="rt-card-head">
-                  <span class="rt-avatar" :style="{ background: agentDisplay(r.agent_id).color }"><Icon :name="agentDisplay(r.agent_id).icon" :size="11" /></span>
-                  <span class="rt-name">{{ agentDisplay(r.agent_id).label }}</span>
-                  <span class="rt-stance">— {{ agentDisplay(r.agent_id).description }}</span>
+                  <span class="rt-avatar" :style="{ background: profileDisplay(profileByAgentId(r.agent_id)).color }"><Icon :name="profileDisplay(profileByAgentId(r.agent_id)).icon" :size="11" /></span>
+                  <span class="rt-name">{{ profileDisplay(profileByAgentId(r.agent_id)).label }}</span>
+                  <span class="rt-stance">— {{ profileDisplay(profileByAgentId(r.agent_id)).description }}</span>
                 </div>
                 <div class="rt-card-body">
                   <span v-if="r.status === 'streaming' && !r.text" class="typing"><span></span><span></span><span></span></span>
@@ -461,13 +456,12 @@ const wsAdapter = computed<WsAdapter>(() => {
 
             <!-- normal message -->
             <div v-else class="msg" :class="chat.messages[row.index].role">
-              <div v-if="chat.messages[row.index].role === 'agent'" class="msg-avatar" :style="{ background: agentById(chat.messages[row.index].agent_id || 'hermes')?.color || '#b8852a' }">
-                <Icon :name="agentById(chat.messages[row.index].agent_id || 'hermes')?.icon || 'brand'" :size="14" />
+              <div v-if="chat.messages[row.index].role === 'agent'" class="msg-avatar" :style="{ background: profileDisplay(profileByAgentId(chat.messages[row.index].agent_id || 'hermes')).color }">
+                <Icon :name="profileDisplay(profileByAgentId(chat.messages[row.index].agent_id || 'hermes')).icon" :size="14" />
               </div>
               <div class="msg-body">
                 <div v-if="chat.messages[row.index].role === 'agent'" class="msg-name">
-                  {{ agentById(chat.messages[row.index].agent_id || 'hermes')?.label || "Hermes" }}
-                  <span v-if="agentById(chat.messages[row.index].agent_id || 'hermes')?.official" class="official">OFFICIAL</span>
+                  {{ profileDisplay(profileByAgentId(chat.messages[row.index].agent_id || 'hermes')).label }}
                 </div>
                 <details v-if="chat.messages[row.index].steps?.length" class="msg-steps" style="margin-bottom:6px">
                   <summary style="font-size:11.5px;color:var(--ink-mute);cursor:pointer;list-style:none">
@@ -509,7 +503,7 @@ const wsAdapter = computed<WsAdapter>(() => {
         <Composer
           v-model="draft"
           placeholder="继续对话…"
-          :agent="{ label: primaryAgent?.label, color: primaryAgent?.color, model: primaryAgent?.version || 'ACP' }"
+          :agent="{ label: primaryProfile?.name, color: primaryProfile?.color, model: primaryProfile?.default_model || 'ACP' }"
           :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :conversation-id="chat.activeId || undefined"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"

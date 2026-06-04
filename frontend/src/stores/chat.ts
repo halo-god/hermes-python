@@ -17,6 +17,7 @@ export const useChatStore = defineStore("chat", () => {
   const teams = ref<Team[]>([]);
   const activeId = ref<string | null>(null);
   const activeAgents = ref<string[]>(["hermes"]);
+  const activeProfiles = ref<Profile[]>([]);
   const messages = ref<Message[]>([]);
   const files = ref<WorkspaceFile[]>([]);
   const streamingConvoId = ref<string | null>(null);
@@ -35,6 +36,13 @@ export const useChatStore = defineStore("chat", () => {
     } catch {
       teams.value = [];
     }
+  }
+
+  /** Sync activeProfiles from activeAgents (backend truth) + profiles list. */
+  function syncActiveProfiles() {
+    activeProfiles.value = activeAgents.value
+      .map((aid) => profiles.value.find((p) => p.default_agent_id === aid))
+      .filter((p): p is Profile => !!p);
   }
 
   async function loadAgents() {
@@ -76,6 +84,7 @@ export const useChatStore = defineStore("chat", () => {
       }));
       hasMoreMessages.value = detail.messages.length >= 50;
       activeAgents.value = detail.active_agent_ids || ["hermes"];
+      syncActiveProfiles();
       files.value = await conversationsApi.files(id);
 
       // Reconnect SSE if conversation has a streaming message
@@ -138,6 +147,14 @@ export const useChatStore = defineStore("chat", () => {
     if (!next.includes("hermes")) next.unshift("hermes");
     const convo = await conversationsApi.setAgents(activeId.value, next);
     activeAgents.value = convo.active_agent_ids;
+    syncActiveProfiles();
+  }
+
+  /** Toggle a profile into/out of the roundtable. Maps to agent_id for backend. */
+  async function toggleProfile(profileId: string) {
+    const profile = profiles.value.find((p) => p.id === profileId);
+    if (!profile) return;
+    await toggleAgent(profile.default_agent_id);
   }
 
   const find = (id: string) => messages.value.find((x) => x.id === id);
@@ -362,6 +379,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations.value.unshift(detail);
     activeId.value = detail.id;
     activeAgents.value = detail.active_agent_ids || ["hermes"];
+    syncActiveProfiles();
     messages.value = [];
     files.value = [];
     return detail.id;
@@ -384,6 +402,7 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = [];
     files.value = [];
     activeAgents.value = ["hermes"];
+    activeProfiles.value = [];
   }
 
   return {
@@ -393,6 +412,7 @@ export const useChatStore = defineStore("chat", () => {
     teams,
     activeId,
     activeAgents,
+    activeProfiles,
     messages,
     files,
     streaming,
@@ -413,6 +433,7 @@ export const useChatStore = defineStore("chat", () => {
     newConversationWithProfile,
     landing,
     toggleAgent,
+    toggleProfile,
     send,
     cancel,
     deleteConversation,
