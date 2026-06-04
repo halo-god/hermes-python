@@ -5,14 +5,13 @@ import { agentsApi } from "@/api/agents";
 import { teamsApi } from "@/api/teams";
 import { tokenStore } from "@/api/client";
 import { useStream } from "@/composables/useStream";
-import type { Agent, Conversation, Message, Team, WorkspaceFile, ConfirmationRequest } from "@/types";
+import type { Conversation, Message, Team, WorkspaceFile, ConfirmationRequest } from "@/types";
 import type { Profile } from "@/api/agents";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api/v1";
 
 export const useChatStore = defineStore("chat", () => {
   const conversations = ref<Conversation[]>([]);
-  const agents = ref<Agent[]>([]);
   const profiles = ref<Profile[]>([]);
   const teams = ref<Team[]>([]);
   const activeId = ref<string | null>(null);
@@ -43,14 +42,6 @@ export const useChatStore = defineStore("chat", () => {
     activeProfiles.value = activeAgents.value
       .map((aid) => profiles.value.find((p) => p.default_agent_id === aid))
       .filter((p): p is Profile => !!p);
-  }
-
-  async function loadAgents() {
-    try {
-      agents.value = await agentsApi.list();
-    } catch {
-      agents.value = [];
-    }
   }
 
   async function loadProfiles() {
@@ -407,11 +398,9 @@ export const useChatStore = defineStore("chat", () => {
 
   return {
     conversations,
-    agents,
     profiles,
     teams,
     activeId,
-    activeAgents,
     activeProfiles,
     messages,
     files,
@@ -424,7 +413,6 @@ export const useChatStore = defineStore("chat", () => {
     streamConnected: stream.connected,
     streamError: stream.error,
     loadTeams,
-    loadAgents,
     loadProfiles,
     loadConversations,
     openConversation,
@@ -434,6 +422,7 @@ export const useChatStore = defineStore("chat", () => {
     landing,
     toggleAgent,
     toggleProfile,
+    profileByAgentId: (agentId: string) => profiles.value.find((p) => p.default_agent_id === agentId),
     send,
     cancel,
     deleteConversation,

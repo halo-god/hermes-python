@@ -5,7 +5,7 @@ import Icon from "@/components/Icon.vue";
 import ModalShell from "@/components/ModalShell.vue";
 import { projectsApi } from "@/api/projects";
 import { useChatStore } from "@/stores/chat";
-import type { Agent, Member, Project } from "@/types";
+import type { Member, Project } from "@/types";
 
 const props = defineProps<{
   teamId: string; teamName: string; members: Member[];
@@ -42,19 +42,15 @@ const form = reactive({
   visibility: (props.project as any)?.visibility || "team",
 });
 
-// Unified list: profiles first, then raw agents without a profile
-const agentItems = computed<Agent[]>(() => {
-  const coveredIds = new Set<string>();
-  const items: Agent[] = [];
-  for (const p of chat.profiles) {
-    const id = p.default_agent_id || p.handle || p.id;
-    items.push({ id, label: p.name, icon: p.icon || "sparkle", color: p.color || "#b8852a", description: p.desc || "" } as Agent);
-    if (p.default_agent_id) coveredIds.add(p.default_agent_id);
-  }
-  for (const a of chat.agents) {
-    if (!coveredIds.has(a.id)) items.push(a);
-  }
-  return items.slice(0, 8);
+// Use profiles directly
+const agentItems = computed(() => {
+  return chat.profiles.filter((p) => p.is_active).slice(0, 8).map((p) => ({
+    id: p.default_agent_id || p.handle || p.id,
+    label: p.name,
+    icon: p.icon || "sparkle",
+    color: p.color || "#b8852a",
+    description: p.desc || "",
+  }));
 });
 let handleEdited = false as boolean;
 if (isEdit.value) handleEdited = true;

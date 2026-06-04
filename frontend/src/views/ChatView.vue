@@ -38,7 +38,6 @@ const teamKnowledge = ref<Knowledge[]>([]);
 const chosenMap = ref<Record<string, boolean>>({});
 
 onMounted(async () => {
-  if (!chat.agents.length) await chat.loadAgents();
   if (!chat.profiles.length) await chat.loadProfiles();
   // Set landing profile from first available profile
   if (chat.profiles.length) {

@@ -9,7 +9,8 @@ const router = useRouter();
 const chat = useChatStore();
 
 function agentById(id: string) {
-  return chat.agents.find((a) => a.id === id) || { id, label: id, color: "#b8852a", icon: "sparkle" };
+  const p = chat.profiles.find((pp) => pp.default_agent_id === id);
+  return { label: p?.name || id, color: p?.color || "#b8852a", icon: p?.icon || "sparkle" };
 }
 
 const tasks = [

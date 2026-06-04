@@ -96,10 +96,10 @@ async function submit() {
     <div class="np-field">
       <label class="np-label">共享助手 <span class="np-hint">团队成员都可使用 · 已选 {{ form.sharedAgents.length }}</span></label>
       <div class="np-agents">
-        <button v-for="a in chat.agents.slice(0, 8)" :key="a.id" class="np-agent" :class="{ on: form.sharedAgents.includes(a.id) }" @click="toggleAgent(a.id)">
-          <span class="np-agent-ico" :style="{ background: a.color || '#b8852a' }"><Icon :name="a.icon || 'sparkle'" /></span>
-          <span class="np-agent-nm">{{ a.label }}</span>
-          <span v-if="form.sharedAgents.includes(a.id)" class="np-agent-check"><Icon name="check" :size="9" /></span>
+        <button v-for="p in chat.profiles.filter((pp) => pp.is_active).slice(0, 8)" :key="p.default_agent_id" class="np-agent" :class="{ on: form.sharedAgents.includes(p.default_agent_id) }" @click="toggleAgent(p.default_agent_id)">
+          <span class="np-agent-ico" :style="{ background: p.color || '#b8852a' }"><Icon :name="p.icon || 'sparkle'" /></span>
+          <span class="np-agent-nm">{{ p.name }}</span>
+          <span v-if="form.sharedAgents.includes(p.default_agent_id)" class="np-agent-check"><Icon name="check" :size="9" /></span>
         </button>
       </div>
     </div>

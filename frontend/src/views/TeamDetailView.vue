@@ -19,7 +19,7 @@ import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { useNotificationStore } from "@/stores/notifications";
 import { renderMarkdown } from "@/utils/markdown";
-import type { Agent, ConfirmationRequest, FileItem, Member, Project, TeamDetail, TeamPolicy, WsAdapter } from "@/types";
+import type { ConfirmationRequest, FileItem, Member, Project, TeamDetail, TeamPolicy, WsAdapter } from "@/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -39,8 +39,9 @@ const showKnowledgePanel = ref(false);
 const clickedKnowledgeId = ref<string | null>(null);
 const teamProfiles = ref<Profile[]>([]);
 
-function agentInfo(id: string): Agent {
-  return chat.agents.find((a) => a.id === id) || ({ id, label: id, color: "#b8852a", icon: "sparkle", description: "" } as Agent);
+function agentInfo(id: string) {
+  const p = chat.profiles.find((pp) => pp.default_agent_id === id);
+  return { id, label: p?.name || id, color: p?.color || "#b8852a", icon: p?.icon || "sparkle", description: p?.desc || "" };
 }
 
 function fmtTime(iso: string) {
@@ -102,7 +103,6 @@ async function load() {
     Object.keys(policyMap).forEach((k) => delete policyMap[k]);
     Object.entries(pol.policy).forEach(([pid, roles]) => (policyMap[pid] = { ...roles }));
   }
-  if (!chat.agents.length) chat.loadAgents();
   if (!chat.profiles.length) chat.loadProfiles();
 }
 

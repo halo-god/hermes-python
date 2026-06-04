@@ -38,7 +38,7 @@ function onKey(e: KeyboardEvent) {
 
 onMounted(() => {
   chat.loadConversations();
-  chat.loadAgents();
+  chat.loadProfiles();
   chat.loadTeams();
   window.addEventListener("keydown", onKey);
   window.addEventListener("hermes:search", openSearch);
@@ -51,7 +51,7 @@ function openSearch() {
   showSearch.value = true;
 }
 
-const hermes = computed(() => chat.agents.find((a) => a.id === "hermes"));
+const hermes = computed(() => chat.profiles.find((p) => p.default_agent_id === "hermes") || chat.profiles.find((p) => p.handle === "hermes"));
 const isNight = computed(() => ["night", "ink"].includes(document.body.dataset.atmos || ""));
 </script>
 
@@ -64,8 +64,8 @@ const isNight = computed(() => ["night", "ink"].includes(document.body.dataset.a
         <button class="icon-btn" title="搜索 (⌘K)" @click="showSearch = true"><Icon name="search" /></button>
         <span class="topbar-spacer"></span>
         <span class="top-pill">
-          <span class="dot" :style="hermes && !hermes.available ? 'background:var(--ink-faint)' : ''"></span>
-          ACP · {{ hermes?.label || 'Hermes Agent' }}
+          <span class="dot" :style="hermes && !hermes.is_active ? 'background:var(--ink-faint)' : ''"></span>
+          ACP · {{ hermes?.name || 'Hermes Agent' }}
         </span>
         <NotificationPanel />
         <button class="icon-btn" title="切换氣質" @click="cycleAtmos"><Icon :name="isNight ? 'sun' : 'moon'" /></button>

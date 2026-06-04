@@ -16,11 +16,11 @@ onMounted(() => nextTick(() => input.value?.focus()));
 const matches = computed(() => {
   const term = q.value.trim().toLowerCase();
   if (!term) {
-    return { convos: chat.conversations.slice(0, 5), agents: chat.agents.slice(0, 4) };
+    return { convos: chat.conversations.slice(0, 5), profiles: chat.profiles.filter((p) => p.is_active).slice(0, 4) };
   }
   return {
     convos: chat.conversations.filter((c) => c.title.toLowerCase().includes(term)),
-    agents: chat.agents.filter((a) => a.label.toLowerCase().includes(term) || (a.description || "").toLowerCase().includes(term)),
+    profiles: chat.profiles.filter((p) => p.is_active && (p.name.toLowerCase().includes(term) || (p.desc || "").toLowerCase().includes(term))),
   };
 });
 
@@ -48,15 +48,15 @@ function pickAgent() {
             <span class="m-tag">{{ c.pinned ? "已置顶" : "" }}</span>
           </button>
         </template>
-        <template v-if="matches.agents.length">
+        <template v-if="matches.profiles.length">
           <div class="palette-section">助手</div>
-          <button v-for="a in matches.agents" :key="a.id" class="menu-item" @click="pickAgent">
-            <Icon :name="a.icon || 'sparkle'" :style="{ color: a.color || '#b8852a' }" />
-            <span class="m-name">{{ a.label }}</span>
-            <span class="m-tag">{{ a.kind === "builtin_mock" ? "mock" : "acp" }}</span>
+          <button v-for="p in matches.profiles" :key="p.id" class="menu-item" @click="pickAgent">
+            <Icon :name="p.icon || 'sparkle'" :style="{ color: p.color || '#b8852a' }" />
+            <span class="m-name">{{ p.name }}</span>
+            <span class="m-tag">{{ p.scope }}</span>
           </button>
         </template>
-        <div v-if="!matches.convos.length && !matches.agents.length" class="palette-empty">没有匹配项</div>
+        <div v-if="!matches.convos.length && !matches.profiles.length" class="palette-empty">没有匹配项</div>
       </div>
     </div>
   </div>
