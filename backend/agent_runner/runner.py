@@ -698,7 +698,7 @@ class Runner:
                 data = _json.loads(val)
                 clarify_id = data.get("clarify_id", str(uuid.uuid4()))
                 question = data.get("question", "需要确认")
-                options = data.get("options", ["继续", "跳过"])
+                options = data.get("options") or ["继续", "跳过"]
                 req_payload = {
                     "id": clarify_id,
                     "conversation_id": conversation_id,
