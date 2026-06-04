@@ -31,15 +31,11 @@ const draft = ref("");
 const scroller = ref<HTMLElement | null>(null);
 const loadMoreSentinel = ref<HTMLElement | null>(null);
 const showWorkspace = ref(false);
-const showAgentMenu = ref(false);
 const showExtractModal = ref(false);
-const agentTab = ref("全部");
 const landingProfileId = ref<string>("");
 const teamKnowledge = ref<Knowledge[]>([]);
 // roundtable per-reply chosen state (keyed by messageId:slot)
 const chosenMap = ref<Record<string, boolean>>({});
-
-const AGENT_TABS = ["全部", "global", "personal", "team"];
 
 onMounted(async () => {
   if (!chat.agents.length) await chat.loadAgents();
@@ -103,12 +99,6 @@ const greeting = computed(() => {
   return { main: `${timePart}，<em>今天有什么安排？</em>`, sub: "Ask me anything · 我会调度合适的助手为你完成。" };
 });
 
-// ── Profile tab filtering ──
-const filteredProfiles = computed(() => {
-  if (agentTab.value === "全部") return chat.profiles.filter((p) => p.is_active);
-  return chat.profiles.filter((p) => p.is_active && p.scope === agentTab.value);
-});
-
 const landingProfile = computed(() => chat.profiles.find((p) => p.id === landingProfileId.value) || chat.profiles.find((p) => p.is_active) || null);
 const activeConvo = computed(() => chat.conversations.find((c) => c.id === chat.activeId));
 const primaryProfile = computed(() => {
@@ -167,14 +157,6 @@ watch(() => chat.messages.length, async () => {
       pre.replaceWith(wrapper.firstElementChild!);
     } catch { /* leave as code block */ }
   }
-});
-
-// Profiles available to add to the roundtable.
-const availableToAdd = computed(() => {
-  const activeAgentIds = new Set(chat.activeAgents);
-  return chat.profiles
-    .filter((p) => p.is_active && p.default_agent_id && !activeAgentIds.has(p.default_agent_id))
-    .map((p) => ({ id: p.id, label: p.name, icon: p.icon || "sparkle", color: p.color || "#b8852a", description: p.desc || "" }));
 });
 
 async function scrollDown() {
@@ -254,9 +236,6 @@ function openFile(fid: string) {
   openFileId.value = fid;
   showWorkspace.value = true;
 }
-function pickProfile(p: Profile) {
-  landingProfileId.value = p.id;
-}
 
 // ── Message actions ──
 async function copyMessage(text: string) {
@@ -308,16 +287,6 @@ const wsAdapter = computed<WsAdapter>(() => {
         <h1 class="hello" v-html="greeting.main"></h1>
         <div class="hello-sub">{{ greeting.sub }}</div>
 
-        <!-- profile switcher -->
-        <div class="agent-bar">
-          <button class="agent-chip active">
-            <span class="avatar" :style="{ background: landingProfile?.color || '#b8852a' }"><Icon :name="landingProfile?.icon || 'brand'" :size="11" /></span>
-            {{ landingProfile?.name || "Hermes" }}
-          </button>
-          <span class="agent-divider"></span>
-          <button class="agent-add" title="添加助手" @click="showAgentMenu = !showAgentMenu"><Icon name="plus" :size="14" /></button>
-        </div>
-
         <Composer
           v-model="draft"
           :placeholder="`给 ${landingProfile?.name || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
@@ -328,27 +297,6 @@ const wsAdapter = computed<WsAdapter>(() => {
           @cancel="chat.cancel()"
         />
 
-        <!-- profiles grid -->
-        <div class="agents-section">
-          <div class="agents-head">
-            <div class="agents-title">选择一位助手开始任务</div>
-            <div class="agents-tabs">
-              <button v-for="t in AGENT_TABS" :key="t" class="agents-tab" :class="{ active: t === agentTab }" @click="agentTab = t">{{ t === 'global' ? '全局' : t === 'personal' ? '个人' : t === 'team' ? '团队' : t }}</button>
-            </div>
-          </div>
-          <div class="agents-grid">
-            <button v-for="p in filteredProfiles" :key="p.id" class="agent-card" @click="pickProfile(p)">
-              <div class="agent-icon" :style="{ background: p.color || '#b8852a' }"><Icon :name="p.icon || 'sparkle'" :size="16" /></div>
-              <div class="agent-meta">
-                <div class="agent-name">{{ p.name }}<span v-if="p.scope === 'global'" class="official">GLOBAL</span></div>
-                <div class="agent-desc">{{ p.desc }}</div>
-              </div>
-            </button>
-            <div v-if="!filteredProfiles.length" style="grid-column:1/-1;color:var(--ink-mute);font-size:13px;padding:16px 0;">
-              暂无该分类的助手
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -381,27 +329,6 @@ const wsAdapter = computed<WsAdapter>(() => {
             <button class="thread-action" v-if="chat.messages.length >= 2" @click="showExtractModal = true" style="flex-shrink:0;margin-top:2px;" title="从对话内容自动创建项目与任务">
               <Icon name="sparkle" /> 智能创建
             </button>
-          </div>
-
-          <!-- profile switcher -->
-          <div class="agent-bar" style="align-self: flex-start">
-            <button v-for="p in chat.activeProfiles" :key="p.id" class="agent-chip" :class="{ active: p.default_agent_id === activeConvo?.primary_agent_id }">
-              <span class="avatar" :style="{ background: p.color || '#b8852a' }"><Icon :name="p.icon || 'sparkle'" :size="11" /></span>
-              {{ p.name }}
-              <span v-if="p.default_agent_id !== 'hermes'" style="margin-left:4px;cursor:pointer;color:var(--ink-mute);" @click.stop="chat.toggleProfile(p.id)">×</span>
-            </button>
-            <span class="agent-divider"></span>
-            <div style="position: relative">
-              <button class="agent-add" title="添加助手" @click="showAgentMenu = !showAgentMenu"><Icon name="plus" :size="14" /></button>
-              <div v-if="showAgentMenu" class="menu" style="top: 32px; left: 0; min-width: 240px">
-                <div class="menu-label">添加助手（圆桌）</div>
-                <button v-for="a in availableToAdd" :key="a.id" class="menu-item" @click="chat.toggleProfile(a.id); showAgentMenu = false">
-                  <Icon :name="a.icon" :style="{ color: a.color }" />
-                  <span class="m-name">{{ a.label }}</span><span class="m-tag">{{ a.description }}</span>
-                </button>
-                <div v-if="!availableToAdd.length" class="menu-item"><span class="m-name" style="color:var(--ink-mute)">没有更多助手</span></div>
-              </div>
-            </div>
           </div>
 
           <!-- messages (virtual scroll) -->
