@@ -530,7 +530,28 @@ class Runner:
             )
             if new_session:
                 await self._set_session_id(conversation_id, new_session)
-            stop_reason = await client.prompt(text)
+
+            # Run prompt with concurrent clarify polling.
+            # The agent's clarify_callback blocks the agent thread while waiting
+            # for user response. Since it can't send on_update events while
+            # blocked, we must poll Redis for pending clarify requests.
+            prompt_task = asyncio.create_task(client.prompt(text))
+            while not prompt_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(prompt_task), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                # Poll Redis for pending clarify requests
+                pending_key = f"hermes:clarify_pending:{conversation_id}"
+                try:
+                    val = await R.get_redis().get(pending_key)
+                    if val:
+                        await self._handle_clarify_tool_call(
+                            conversation_id, acc["current_msg_id"], acc
+                        )
+                except Exception:
+                    pass
+            stop_reason = prompt_task.result()
         except ACPTimeout as exc:
             logger.error("prompt timed out for %s: %s", conversation_id, exc)
             await self.pool.drop(conversation_id)
