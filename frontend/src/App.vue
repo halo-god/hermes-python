@@ -22,13 +22,22 @@ const themeOverrides = computed(() => ({
   },
 }));
 
-onMounted(() => auth.bootstrap());
+onMounted(async () => {
+  await auth.bootstrap();
+  // Start heartbeat after bootstrap confirms user is authenticated
+  if (auth.user) {
+    startHeartbeat();
+  }
+});
 
-// Start presence heartbeat when user is authenticated
-watch(() => auth.user, (user) => {
-  if (user) startHeartbeat();
-  else stopHeartbeat();
-}, { immediate: true });
+// Also handle login/logout transitions
+watch(() => auth.user, (user, oldUser) => {
+  if (user && !oldUser) {
+    startHeartbeat();
+  } else if (!user && oldUser) {
+    stopHeartbeat();
+  }
+});
 </script>
 
 <template>
