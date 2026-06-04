@@ -87,7 +87,6 @@ function closeMenus() {
   menuFor.value = null;
   projMenuFor.value = null;
   chCardMsg.value = null;
-  showKnowledgePicker.value = false;
 }
 
 async function load() {
@@ -399,12 +398,8 @@ function onChannelFileSelected(e: Event) {
 }
 
 function toggleKnowledgePicker() {
-  // Prevent the document click handler from immediately closing the picker
-  const willOpen = !showKnowledgePicker.value;
-  showKnowledgePicker.value = willOpen;
-  if (willOpen) pickerJustOpened = true;
+  showKnowledgePicker.value = !showKnowledgePicker.value;
 }
-let pickerJustOpened = false;
 function onKnowledgePickerSelect(ids: string[]) {
   showKnowledgePicker.value = false;
   for (const kid of ids) {
