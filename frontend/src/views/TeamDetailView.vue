@@ -890,8 +890,9 @@ async function deleteTeam() {
             <div v-if="showKnowledgePicker" style="position:relative">
               <div style="background:var(--bg-panel);border:1px solid var(--rule);border-radius:8px;padding:6px;max-height:180px;overflow-y:auto;box-shadow:var(--shadow-lg)">
                 <div v-if="!team.knowledge.length" style="padding:8px;font-size:12.5px;color:var(--ink-mute)">没有知识库文件</div>
-                <button v-for="k in team.knowledge" :key="k.id" class="menu-item" style="width:100%;text-align:left" @click="addChannelAttachment(k)">
-                  <Icon name="doc" :size="13" />{{ k.name }}
+                <button v-for="k in team.knowledge" :key="k.id" class="menu-item" style="width:100%;text-align:left;display:flex;align-items:center;gap:6px" @click="addChannelAttachment(k)">
+                  <Icon name="doc" :size="13" /><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ k.name }}</span>
+                  <span style="font-size:11px;color:var(--accent);flex-shrink:0">引用</span>
                 </button>
               </div>
             </div>
