@@ -428,7 +428,6 @@ class Runner:
         agent_id = task.get("agent_id", "hermes")
         text = task["text"]
         system_prompt: str | None = task.get("system_prompt") or None
-        profile_path: str | None = task.get("profile_path") or None
 
         agent = self.agents.get(agent_id) or self.agents.get("hermes")
         if agent is None:
@@ -595,7 +594,6 @@ class Runner:
             client, new_session = await self.pool.get(
                 conversation_id, agent.command, cwd, on_update, on_fs_write,
                 acp_session_id=acp_session_id,
-                profile_path=profile_path,
             )
             logger.info(
                 "handle_single: conv=%s msg=%s client_pid=%s new_session=%s",

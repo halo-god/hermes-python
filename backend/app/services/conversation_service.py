@@ -207,7 +207,6 @@ async def send_message(
     attached_file_ids: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
     system_prompt: str | None = None,
-    profile_path: str | None = None,
 ) -> tuple[Message, Message]:
     """Persist the user turn + an empty streaming agent turn, then enqueue ACP work.
 
@@ -333,7 +332,6 @@ async def send_message(
             "text": full_text,
             "content_blocks": prompt_blocks if len(prompt_blocks) > 1 else None,
             "system_prompt": system_prompt,
-            "profile_path": profile_path,
         }
     )
     return user_msg, agent_msg
@@ -347,7 +345,6 @@ async def send_roundtable(
     attached_file_ids: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
     system_prompt: str | None = None,
-    profile_path: str | None = None,
 ) -> tuple[Message, Message]:
     """Multi-agent turn: one roundtable message holding per-agent replies + a
     synthesized merge. The runner streams each reply in parallel, then merges."""
@@ -431,10 +428,9 @@ async def send_roundtable(
             "agents": agents,
             "text": prompt_text,
             "system_prompt": system_prompt,
-            "profile_path": profile_path,
         }
     )
-    return user_msg, rt_msg
+    return user_msg, agent_msg
 
 
 async def dispatch(
@@ -450,25 +446,23 @@ async def dispatch(
     if skip_agent:
         return await send_user_only(db, convo, text, attached_file_ids=attached_file_ids, owner_id=owner_id)
 
-    # Load profile to get system_prompt and path for the runner
+    # Load profile system_prompt for the runner
     system_prompt: str | None = None
-    profile_path: str | None = None
     if convo.profile_id:
         profile = await db.get(Profile, convo.profile_id)
         if profile:
             system_prompt = profile.system_prompt or None
-            profile_path = profile.path or None
 
     if len(agents) > 1:
         return await send_roundtable(
             db, convo, text, agents,
             attached_file_ids=attached_file_ids, owner_id=owner_id,
-            system_prompt=system_prompt, profile_path=profile_path,
+            system_prompt=system_prompt,
         )
     return await send_message(
         db, convo, text,
         attached_file_ids=attached_file_ids, owner_id=owner_id,
-        system_prompt=system_prompt, profile_path=profile_path,
+        system_prompt=system_prompt,
     )
 
 

@@ -44,7 +44,6 @@ class SessionPool:
         on_update: OnUpdate,
         on_fs_write: OnFsWrite,
         acp_session_id: str | None = None,
-        profile_path: str | None = None,
     ) -> tuple[ACPClient, str | None]:
         """Return (client, new_session_id_or_None). session id is set only when
         a fresh subprocess+session was created."""
@@ -59,11 +58,8 @@ class SessionPool:
         if c is not None:
             await self.drop(conversation_id)
 
-        # Build command — append --profile PATH if provided
+        # Build command
         effective_command = list(command)
-        if profile_path:
-            effective_command += ["--profile", profile_path]
-            logger.info("Using profile path: %s", profile_path)
 
         c = ACPClient(
             effective_command,
