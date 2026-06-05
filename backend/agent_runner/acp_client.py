@@ -86,11 +86,16 @@ class ACPClient:
         logger.info("ACP subprocess started: %s (cwd=%s)", " ".join(argv), self.cwd)
 
     async def stop(self) -> None:
+        import contextlib
         self._closed = True
         if self._reader_task:
             self._reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reader_task
         if self._stderr_task:
             self._stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._stderr_task
         if self._proc and self._proc.returncode is None:
             try:
                 self._proc.terminate()

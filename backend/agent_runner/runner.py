@@ -53,6 +53,7 @@ class Runner:
         self._lock_token: str | None = None
         self._sem = asyncio.Semaphore(MAX_CONCURRENT)
         self._active_tasks: set[asyncio.Task] = set()
+        self._bg_tasks: set[asyncio.Task] = set()
 
     # ── Singleton lock ──
     async def _acquire_lock(self) -> bool:
@@ -168,15 +169,20 @@ class Runner:
 
     # ── Heartbeat + reclaim loop ──
     async def _heartbeat_loop(self) -> None:
-        """Background task: refresh lock + reclaim stale messages."""
-        counter = 0
+        """Background task: refresh lock + reclaim stale messages + evict idle sessions."""
+        reclaim_counter = 0
+        evict_counter = 0
         while not self._shutdown:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             await self._refresh_lock()
-            counter += 1
-            if counter * HEARTBEAT_INTERVAL >= RECLAIM_INTERVAL:
-                counter = 0
+            reclaim_counter += 1
+            if reclaim_counter * HEARTBEAT_INTERVAL >= RECLAIM_INTERVAL:
+                reclaim_counter = 0
                 await self._reclaim_stale()
+            evict_counter += 1
+            if evict_counter * HEARTBEAT_INTERVAL >= 300:  # every 5 minutes
+                evict_counter = 0
+                await self.pool.evict_idle()
 
     # ── main loop ──
     async def run(self) -> None:
@@ -199,6 +205,7 @@ class Runner:
         # Start background heartbeat + reclaim
         heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
+        _xread_backoff = 2.0
         try:
             while not self._shutdown:
                 try:
@@ -209,9 +216,11 @@ class Runner:
                         count=1,
                         block=3000,
                     )
+                    _xread_backoff = 2.0  # reset on success
                 except Exception:
-                    logger.exception("xreadgroup failed; backing off")
-                    await asyncio.sleep(2)
+                    logger.exception("xreadgroup failed; backing off %.0fs", _xread_backoff)
+                    await asyncio.sleep(_xread_backoff)
+                    _xread_backoff = min(_xread_backoff * 1.5, 30.0)
                     continue
 
                 if not resp:
@@ -244,6 +253,9 @@ class Runner:
             if self._active_tasks:
                 logger.info("Waiting for %d active task(s) to finish...", len(self._active_tasks))
                 await asyncio.wait(self._active_tasks, timeout=60)
+            # Wait for background clarify/title tasks
+            if self._bg_tasks:
+                await asyncio.gather(*self._bg_tasks, return_exceptions=True)
             await self._release_lock()
 
     # ── concurrency helpers ──
@@ -415,6 +427,8 @@ class Runner:
         message_id = task["message_id"]
         agent_id = task.get("agent_id", "hermes")
         text = task["text"]
+        system_prompt: str | None = task.get("system_prompt") or None
+        profile_path: str | None = task.get("profile_path") or None
 
         agent = self.agents.get(agent_id) or self.agents.get("hermes")
         if agent is None:
@@ -509,7 +523,9 @@ class Runner:
             elif kind == "session_info":
                 new_title = update.get("title")
                 if new_title:
-                    asyncio.ensure_future(self._update_conv_title(conversation_id, new_title))
+                    t = asyncio.create_task(self._update_conv_title(conversation_id, new_title))
+                    self._bg_tasks.add(t)
+                    t.add_done_callback(self._bg_tasks.discard)
                     await R.publish_event(conversation_id, {"type": "session_info", "title": new_title})
             elif kind == "confirmation_request":
                 # Agent natively sent a confirmation_request via session/update.
@@ -531,9 +547,11 @@ class Runner:
                 )
                 logger.info("Native confirmation_request, sent SSE: %s", request_id)
                 # Wait for user response in background, then inject result into agent
-                asyncio.ensure_future(
+                t = asyncio.create_task(
                     self._wait_and_unblock_clarify(conversation_id, request_id)
                 )
+                self._bg_tasks.add(t)
+                t.add_done_callback(self._bg_tasks.discard)
             # Cooperative cancellation between chunks.
             if not acc["cancelled"] and await R.is_cancelled(conversation_id):
                 acc["cancelled"] = True
@@ -577,6 +595,7 @@ class Runner:
             client, new_session = await self.pool.get(
                 conversation_id, agent.command, cwd, on_update, on_fs_write,
                 acp_session_id=acp_session_id,
+                profile_path=profile_path,
             )
             logger.info(
                 "handle_single: conv=%s msg=%s client_pid=%s new_session=%s",
@@ -592,9 +611,23 @@ class Runner:
             # blocked, we must poll Redis for pending clarify requests.
             # NOTE: agent uses ACP session_id as key, not conversation_id
             clarify_session_id = new_session or conversation_id
+            # Prepend system_prompt on the first message of a new session
+            effective_text = text
+            if new_session and system_prompt:
+                effective_text = f"{system_prompt}\n\n{text}"
+
             # Use content_blocks if available (ACP structured content), else plain text
             content_blocks = task.get("content_blocks")
-            prompt_content = content_blocks if content_blocks else text
+            if content_blocks:
+                # Inject system_prompt into the first text block
+                if new_session and system_prompt:
+                    for block in content_blocks:
+                        if block.get("type") == "text":
+                            block["text"] = f"{system_prompt}\n\n{block['text']}"
+                            break
+                prompt_content = content_blocks
+            else:
+                prompt_content = effective_text
             prompt_task = asyncio.create_task(client.prompt(prompt_content))
             while not prompt_task.done():
                 try:
@@ -773,9 +806,11 @@ class Runner:
                 acc["_clarify_handled"] = True
 
                 # Start background task to wait for user response and unblock agent
-                asyncio.ensure_future(
+                t = asyncio.create_task(
                     self._wait_and_unblock_clarify(conversation_id, clarify_id, clarify_session_id=sid)
                 )
+                self._bg_tasks.add(t)
+                t.add_done_callback(self._bg_tasks.discard)
         except Exception:
             logger.debug("No pending clarify request found", exc_info=True)
 

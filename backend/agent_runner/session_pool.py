@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from app.config import settings
 from agent_runner.acp_client import ACPClient, ACPTimeout, OnFsWrite, OnUpdate
@@ -19,10 +20,14 @@ POOL_START_TIMEOUT = 30
 POOL_INIT_TIMEOUT = 60
 POOL_SESSION_TIMEOUT = 30
 
+# Evict sessions that have been idle for more than this many seconds (1 hour)
+IDLE_TIMEOUT = 3600
+
 
 class SessionPool:
     def __init__(self) -> None:
         self._clients: dict[str, ACPClient] = {}
+        self._last_used: dict[str, float] = {}
 
     def _alive(self, c: ACPClient) -> bool:
         return (
@@ -39,9 +44,11 @@ class SessionPool:
         on_update: OnUpdate,
         on_fs_write: OnFsWrite,
         acp_session_id: str | None = None,
+        profile_path: str | None = None,
     ) -> tuple[ACPClient, str | None]:
         """Return (client, new_session_id_or_None). session id is set only when
         a fresh subprocess+session was created."""
+        self._last_used[conversation_id] = time.monotonic()
         c = self._clients.get(conversation_id)
         if c is not None and self._alive(c):
             c.on_update = on_update
@@ -52,8 +59,14 @@ class SessionPool:
         if c is not None:
             await self.drop(conversation_id)
 
+        # Build command — append --profile PATH if provided
+        effective_command = list(command)
+        if profile_path:
+            effective_command += ["--profile", profile_path]
+            logger.info("Using profile path: %s", profile_path)
+
         c = ACPClient(
-            command,
+            effective_command,
             cwd,
             protocol_version=settings.acp_protocol_version,
             on_update=on_update,
@@ -99,10 +112,20 @@ class SessionPool:
 
     async def drop(self, conversation_id: str) -> None:
         c = self._clients.pop(conversation_id, None)
+        self._last_used.pop(conversation_id, None)
         if c:
             await c.stop()
+
+    async def evict_idle(self) -> None:
+        """Drop sessions that have been idle longer than IDLE_TIMEOUT."""
+        cutoff = time.monotonic() - IDLE_TIMEOUT
+        stale = [cid for cid, t in self._last_used.items() if t < cutoff]
+        for cid in stale:
+            logger.info("Evicting idle session for conversation %s", cid[:8])
+            await self.drop(cid)
 
     async def close_all(self) -> None:
         for c in list(self._clients.values()):
             await c.stop()
         self._clients.clear()
+        self._last_used.clear()
