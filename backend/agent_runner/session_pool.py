@@ -74,7 +74,6 @@ class SessionPool:
                 supports_resume = bool(
                     agent_caps.get("sessionCapabilities", {}).get("resume")
                 )
-                supports_load = bool(agent_caps.get("loadSession"))
                 if supports_resume:
                     try:
                         await asyncio.wait_for(
@@ -85,17 +84,9 @@ class SessionPool:
                     except Exception as exc:
                         logger.warning("Resume failed for %s: %s, falling back to new", acp_session_id[:8], exc)
                         session_id = await asyncio.wait_for(c.new_session(cwd), timeout=POOL_SESSION_TIMEOUT)
-                elif supports_load:
-                    try:
-                        await asyncio.wait_for(
-                            c.load_session(acp_session_id, cwd), timeout=POOL_SESSION_TIMEOUT,
-                        )
-                        session_id = None
-                        logger.info("Loaded ACP session %s for conv %s", acp_session_id[:8], conversation_id[:8])
-                    except Exception as exc:
-                        logger.warning("Load failed for %s: %s, falling back to new", acp_session_id[:8], exc)
-                        session_id = await asyncio.wait_for(c.new_session(cwd), timeout=POOL_SESSION_TIMEOUT)
                 else:
+                    # No resume support — create new session (don't use load,
+                    # as it replays history and conflicts with our on_update callback)
                     session_id = await asyncio.wait_for(c.new_session(cwd), timeout=POOL_SESSION_TIMEOUT)
             else:
                 session_id = await asyncio.wait_for(c.new_session(cwd), timeout=POOL_SESSION_TIMEOUT)

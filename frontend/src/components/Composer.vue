@@ -147,6 +147,9 @@ function onFileSelected(e: Event) {
 function onPaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items;
   if (!items) return;
+  // Only intercept pure image paste; mixed content (text+image) lets text through
+  const hasText = Array.from(items).some(it => it.type.startsWith("text/"));
+  if (hasText) return; // let default paste handle text
   for (const item of items) {
     if (item.type.startsWith("image/")) {
       e.preventDefault();

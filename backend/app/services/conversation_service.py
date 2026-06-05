@@ -285,8 +285,9 @@ async def send_message(
                 # Text files: include inline as before (fallback for agents that don't support resource_link)
                 content = f.get("content", "")
                 if content:
-                    if len(content) > 200000:
-                        content = content[:200000] + f"\n\n... [文件截断，共 {len(f.get('content', ''))} 字符]"
+                    orig_len = len(content)
+                    if orig_len > 200000:
+                        content = content[:200000] + f"\n\n... [文件截断，共 {orig_len} 字符]"
                     text_parts.append(f"【附件: {f['name']}】\n```\n{content}\n```")
                 else:
                     text_parts.append(f"【附件: {f['name']}】（文件内容为空）")
