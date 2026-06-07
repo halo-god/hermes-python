@@ -29,6 +29,7 @@ class Conversation(UUIDPrimaryKey, Timestamps, Base):
     active_agent_ids: Mapped[list] = mapped_column(JSONB, default=lambda: ["hermes"])
     profile_id: Mapped[str | None] = mapped_column(String(64))
     acp_session_id: Mapped[str | None] = mapped_column(String(128))
+    session_mode: Mapped[str | None] = mapped_column(String(32))
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     visibility: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
     is_channel: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

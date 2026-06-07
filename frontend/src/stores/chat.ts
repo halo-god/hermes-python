@@ -24,6 +24,7 @@ export const useChatStore = defineStore("chat", () => {
   const streaming = computed(() => streamingConvoId.value !== null);
   const loading = ref(false);
   const contextTokens = ref(0);
+  const contextSize = ref(0);
   const features = ref<{ followup_chips: boolean }>({ followup_chips: false });
   const pendingConfirmations = ref<ConfirmationRequest[]>([]);
   const hasMoreMessages = ref(true);
@@ -78,6 +79,7 @@ export const useChatStore = defineStore("chat", () => {
     loading.value = true;
     hasMoreMessages.value = true;
     contextTokens.value = 0;
+    contextSize.value = 0;
     try {
       const detail = await conversationsApi.get(id);
       // Map content.tool_calls to steps for persisted messages
@@ -277,8 +279,12 @@ export const useChatStore = defineStore("chat", () => {
       if (ev.context_size != null) usage.context_size = ev.context_size;
       if (ev.context_used != null) usage.context_used = ev.context_used;
       if (m) m.usage = usage as any;
-      if (ev.context_size) contextTokens.value = ev.context_used || 0;
-      else contextTokens.value = (ev.input_tokens || 0) + (ev.output_tokens || 0);
+      if (ev.context_size) {
+        contextSize.value = ev.context_size;
+        contextTokens.value = ev.context_used || 0;
+      } else {
+        contextTokens.value = (ev.input_tokens || 0) + (ev.output_tokens || 0);
+      }
     });
 
     stream.on("session_info", (ev) => {
@@ -475,6 +481,7 @@ export const useChatStore = defineStore("chat", () => {
     hasMoreMessages,
     loadingOlder,
     contextTokens,
+    contextSize,
     streamingConvoId,
     features,
     loadConfig,

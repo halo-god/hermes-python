@@ -47,6 +47,7 @@ class ConversationOut(BaseModel):
     team_id: uuid.UUID | None = None
     project_id: uuid.UUID | None = None
     acp_session_id: str | None
+    session_mode: str | None = None
     pinned: bool
     visibility: str
     created_at: datetime
@@ -104,3 +105,11 @@ class WorkspaceFileVersionOut(BaseModel):
 class ConfirmRequest(BaseModel):
     request_id: str
     choice: str
+
+
+class SetSessionModeRequest(BaseModel):
+    mode: str = Field(pattern="^(ask|accept_edits|dont_ask)$")
+
+
+class SetSessionModelRequest(BaseModel):
+    model_id: str = Field(min_length=1)

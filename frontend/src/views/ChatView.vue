@@ -327,9 +327,65 @@ const wsAdapter = computed<WsAdapter>(() => {
 });
 
 // ── Context window ring ──
-const CTX_MAX = 200_000;
-const ctxPct = computed(() => Math.min(1, chat.contextTokens / CTX_MAX));
+const ctxMax = computed(() => chat.contextSize > 0 ? chat.contextSize : 200_000);
+const ctxPct = computed(() => Math.min(1, chat.contextTokens / ctxMax.value));
 const ctxColor = computed(() => ctxPct.value > 0.85 ? "var(--danger)" : ctxPct.value > 0.65 ? "#e6a817" : "var(--ok)");
+const ctxPctLabel = computed(() => `${Math.round(ctxPct.value * 100)}%`);
+const ctxTooltip = computed(() =>
+  chat.contextSize > 0
+    ? `${chat.contextTokens.toLocaleString()} / ${chat.contextSize.toLocaleString()} tokens (${ctxPctLabel.value})`
+    : `${chat.contextTokens.toLocaleString()} tokens`
+);
+
+// ── Session controls ──
+const forking = ref(false);
+const sessionMode = ref<string>((activeConvo.value as any)?.session_mode || "ask");
+const sessionModel = ref("");
+const showModelPicker = ref(false);
+
+const SESSION_MODES = [
+  { id: "ask", label: "Ask", desc: "编辑需确认" },
+  { id: "accept_edits", label: "Accept", desc: "自动审批工作区" },
+  { id: "dont_ask", label: "Auto", desc: "全自动" },
+];
+const MODEL_PRESETS = [
+  { id: "", label: "默认" },
+  { id: "openrouter:anthropic/claude-sonnet-4", label: "Claude Sonnet" },
+  { id: "openrouter:openai/gpt-4o", label: "GPT-4o" },
+  { id: "openrouter:google/gemini-2.5-pro", label: "Gemini Pro" },
+  { id: "openrouter:deepseek/deepseek-chat", label: "DeepSeek" },
+];
+
+async function forkSession() {
+  if (!chat.activeId || forking.value) return;
+  forking.value = true;
+  try {
+    const d = await conversationsApi.forkSession(chat.activeId);
+    await chat.loadConversations();
+    await chat.openConversation(d.id);
+  } catch (e: any) {
+    console.error("Fork failed:", e);
+  } finally {
+    forking.value = false;
+  }
+}
+
+async function changeSessionMode(mode: string) {
+  if (!chat.activeId) return;
+  sessionMode.value = mode;
+  try {
+    await conversationsApi.setSessionMode(chat.activeId, mode);
+  } catch { /* revert on error */ }
+}
+
+async function changeSessionModel(modelId: string) {
+  if (!chat.activeId) return;
+  sessionModel.value = modelId;
+  showModelPicker.value = false;
+  try {
+    await conversationsApi.setSessionModel(chat.activeId, modelId);
+  } catch { /* ignore */ }
+}
 const ctxK = computed(() => chat.contextTokens >= 1000 ? `${(chat.contextTokens / 1000).toFixed(0)}k` : `${chat.contextTokens}`);
 
 // ── Session export ──
@@ -598,7 +654,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                 </div>
               </div>
             </div>
-            <div v-if="chat.contextTokens > 0" class="ctx-ring-wrap" :title="`${chat.contextTokens.toLocaleString()} tokens used`">
+            <div v-if="chat.contextTokens > 0" class="ctx-ring-wrap" :title="ctxTooltip">
               <svg class="ctx-ring" viewBox="0 0 32 32">
                 <circle cx="16" cy="16" r="12" fill="none" stroke="var(--rule)" stroke-width="3"/>
                 <circle cx="16" cy="16" r="12" fill="none" :stroke="ctxColor" stroke-width="3"
@@ -616,6 +672,27 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
             <button class="thread-action" v-if="chat.messages.length >= 2" @click="showExtractModal = true" style="flex-shrink:0;margin-top:2px;" title="从对话内容自动创建项目与任务">
               <Icon name="sparkle" /> 智能创建
             </button>
+            <!-- Fork session -->
+            <button class="thread-action" v-if="chat.activeId && activeConvo?.acp_session_id" @click="forkSession" :disabled="forking" style="flex-shrink:0;margin-top:2px;" title="Fork ACP session (分支历史)">
+              <Icon name="copy" /> {{ forking ? 'Forking…' : 'Fork' }}
+            </button>
+            <!-- Edit approval mode -->
+            <div v-if="chat.activeId && activeConvo?.acp_session_id" class="mode-toggle" style="flex-shrink:0;margin-top:2px;">
+              <button v-for="m in SESSION_MODES" :key="m.id" class="mode-btn" :class="{ active: sessionMode === m.id }" :title="m.desc" @click="changeSessionMode(m.id)">
+                {{ m.label }}
+              </button>
+            </div>
+            <!-- Model switcher -->
+            <div v-if="chat.activeId && activeConvo?.acp_session_id" style="position:relative;flex-shrink:0;margin-top:2px;">
+              <button class="thread-action model-btn" @click="showModelPicker = !showModelPicker" :title="sessionModel || '默认模型'">
+                <Icon name="bolt" /> {{ sessionModel ? MODEL_PRESETS.find(m => m.id === sessionModel)?.label || sessionModel.split(':').pop() : 'Model' }}
+              </button>
+              <div v-if="showModelPicker" class="model-dropdown" @mousedown.stop>
+                <button v-for="mp in MODEL_PRESETS" :key="mp.id" class="menu-item" :class="{ active: sessionModel === mp.id }" @click="changeSessionModel(mp.id)">
+                  {{ mp.label }}
+                </button>
+              </div>
+            </div>
             <div v-if="chat.messages.length >= 2" style="position:relative;flex-shrink:0;margin-top:2px;">
               <button class="thread-action" @click="showExport = !showExport"><Icon name="download" /> 导出</button>
               <div v-if="showExport" class="export-menu" @mouseleave="showExport = false">

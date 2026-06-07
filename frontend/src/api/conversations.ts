@@ -100,4 +100,13 @@ export const conversationsApi = {
   async fork(id: string, beforeMessageId: string): Promise<ConversationDetail> {
     return (await http.post<ConversationDetail>(`/conversations/${id}/fork?before_message_id=${beforeMessageId}`)).data;
   },
+  async forkSession(id: string): Promise<ConversationDetail> {
+    return (await http.post<ConversationDetail>(`/conversations/${id}/session/fork`)).data;
+  },
+  async setSessionMode(id: string, mode: string): Promise<void> {
+    await http.put(`/conversations/${id}/session/mode`, { mode });
+  },
+  async setSessionModel(id: string, modelId: string): Promise<void> {
+    await http.put(`/conversations/${id}/session/model`, { model_id: modelId });
+  },
 };

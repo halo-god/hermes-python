@@ -172,6 +172,7 @@ export interface Conversation {
   active_agent_ids: string[];
   profile_id: string | null;
   acp_session_id: string | null;
+  session_mode?: string | null;
   pinned: boolean;
   visibility: string;
   team_id: string | null;

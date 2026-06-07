@@ -138,3 +138,34 @@ async def presence_status(user_ids: list[str]) -> dict[str, str]:
         pipe.exists(f"{_PRESENCE_PREFIX}{uid}")
     results = await pipe.execute()
     return {uid: "online" if exists else "offline" for uid, exists in zip(user_ids, results)}
+
+
+# ── ACP session control channel ──
+_CONTROL_STREAM = "acp:control"
+
+
+async def publish_control(conversation_id: str, data: dict) -> None:
+    """Send a control message to the runner (fork/model/mode)."""
+    import json
+    data["conversation_id"] = conversation_id
+    await get_redis().xadd(_CONTROL_STREAM, {"data": json.dumps(data)})
+
+
+async def wait_for_control_response(conversation_id: str, timeout: float = 15.0) -> dict:
+    """Wait for runner's response to a control request."""
+    import asyncio
+    import json
+    channel = f"chan:control:{conversation_id}"
+    r = get_redis()
+    pubsub = r.pubsub()
+    await pubsub.subscribe(channel)
+    try:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if msg and msg["type"] == "message":
+                return json.loads(msg["data"])
+            await asyncio.sleep(0.1)
+        return {"error": "timeout"}
+    finally:
+        await pubsub.unsubscribe(channel)

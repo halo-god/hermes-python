@@ -184,6 +184,91 @@ class Runner:
                 evict_counter = 0
                 await self.pool.evict_idle()
 
+    # ── ACP session control loop ──
+    async def _control_loop(self) -> None:
+        """Background task: process fork/model control messages from API."""
+        import json as _json
+        redis = R.get_redis()
+        stream = "acp:control"
+        group = "runner-control"
+        consumer = "runner-0"
+
+        # Create consumer group (ignore if exists)
+        try:
+            await redis.xgroup_create(stream, group, id="0", mkstream=True)
+        except Exception:
+            pass
+
+        while not self._shutdown:
+            try:
+                resp = await redis.xreadgroup(
+                    group, consumer, {stream: ">"}, count=1, block=3000,
+                )
+            except Exception:
+                await asyncio.sleep(2)
+                continue
+            if not resp:
+                continue
+            for _s, entries in resp:
+                for entry_id, fields in entries:
+                    try:
+                        await redis.xack(stream, group, entry_id)
+                    except Exception:
+                        pass
+                    raw = fields.get(b"data", fields.get("data"))
+                    if not raw:
+                        continue
+                    try:
+                        data = _json.loads(raw)
+                    except Exception:
+                        continue
+                    t = asyncio.create_task(self._handle_control(data))
+                    self._bg_tasks.add(t)
+                    t.add_done_callback(self._bg_tasks.discard)
+
+    async def _handle_control(self, data: dict) -> None:
+        """Handle a single control message (fork/model)."""
+        import json as _json
+        ctrl_type = data.get("type")
+        conv_id = data.get("conversation_id", "")
+        response_channel = f"chan:control:{conv_id}"
+        redis = R.get_redis()
+
+        if ctrl_type == "fork":
+            new_conv_id = data.get("new_conversation_id", "")
+            client = self.pool._clients.get(conv_id)
+            if client and client._session_id:
+                try:
+                    import os
+                    cwd = os.path.join(settings.workspace_root, new_conv_id)
+                    os.makedirs(cwd, exist_ok=True)
+                    new_sid = await asyncio.wait_for(
+                        client.fork_session(client._session_id, cwd), timeout=15,
+                    )
+                    await redis.publish(response_channel, _json.dumps({"session_id": new_sid}))
+                    logger.info("Forked ACP session %s -> %s", client._session_id[:8], new_sid[:8])
+                except Exception as e:
+                    logger.error("Fork failed: %s", e)
+                    await redis.publish(response_channel, _json.dumps({"error": str(e)}))
+            else:
+                await redis.publish(response_channel, _json.dumps({"error": "no active session"}))
+
+        elif ctrl_type == "model":
+            model_id = data.get("model_id", "")
+            client = self.pool._clients.get(conv_id)
+            if client and client._session_id:
+                try:
+                    await asyncio.wait_for(
+                        client.set_session_model(client._session_id, model_id), timeout=10,
+                    )
+                    await redis.publish(response_channel, _json.dumps({"ok": True}))
+                    logger.info("Set model %s on session %s", model_id, client._session_id[:8])
+                except Exception as e:
+                    logger.error("Set model failed: %s", e)
+                    await redis.publish(response_channel, _json.dumps({"error": str(e)}))
+            else:
+                await redis.publish(response_channel, _json.dumps({"error": "no active session"}))
+
     # ── main loop ──
     async def run(self) -> None:
         configure_logging()
@@ -204,6 +289,7 @@ class Runner:
 
         # Start background heartbeat + reclaim
         heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        control_task = asyncio.create_task(self._control_loop())
 
         _xread_backoff = 2.0
         try:
@@ -244,6 +330,7 @@ class Runner:
                         self._active_tasks.add(task)
                         task.add_done_callback(self._on_task_done)
         finally:
+            control_task.cancel()
             heartbeat_task.cancel()
             try:
                 await heartbeat_task
@@ -437,12 +524,14 @@ class Runner:
         cwd = os.path.join(settings.workspace_root, conversation_id)
         os.makedirs(cwd, exist_ok=True)
 
-        # Load existing ACP session ID for resume
+        # Load existing ACP session ID and mode for resume
         acp_session_id = None
+        session_mode = None
         async with async_session_maker() as db:
             convo = await db.get(Conversation, uuid.UUID(conversation_id))
-            if convo and convo.acp_session_id:
+            if convo:
                 acp_session_id = convo.acp_session_id
+                session_mode = convo.session_mode
 
         acc = {"text": "", "cancelled": False, "current_msg_id": message_id, "tool_since_split": False}
         steps: list[dict] = []  # Collect tool_call steps for persistence
@@ -614,6 +703,13 @@ class Runner:
             )
             if new_session:
                 await self._set_session_id(conversation_id, new_session)
+                # Apply session mode (edit approval policy) if set
+                if session_mode:
+                    try:
+                        await client.set_session_mode(new_session, session_mode)
+                        logger.info("Applied session_mode=%s to new session %s", session_mode, new_session[:8])
+                    except Exception:
+                        logger.debug("Could not apply session_mode", exc_info=True)
 
             # Run prompt with concurrent clarify polling.
             # The agent's clarify_callback blocks the agent thread while waiting

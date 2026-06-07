@@ -3619,6 +3619,21 @@ body[data-atmos="cinnabar"] {
                              cursor: pointer; }
   .export-menu .menu-item:hover { background: var(--bg-hover); }
 
+  /* ── Session controls: mode toggle + model picker ── */
+  .mode-toggle { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  .mode-btn { font-size: 11px; padding: 3px 8px; border: none; background: none; color: var(--ink-mute);
+              cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  .mode-btn:not(:last-child) { border-right: 1px solid var(--rule); }
+  .mode-btn.active { background: var(--accent-tint, rgba(184,133,42,0.15)); color: var(--accent-deep, #7a5a1a); font-weight: 600; }
+  .mode-btn:hover:not(.active) { background: var(--bg-hover); }
+  .model-btn { font-size: 12px; }
+  .model-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-panel); border: 1px solid var(--rule);
+                    border-radius: 8px; z-index: 50; min-width: 140px; box-shadow: var(--shadow-lg); padding: 4px 0; }
+  .model-dropdown .menu-item { display: block; width: 100%; text-align: left; padding: 6px 14px;
+                               font-size: 13px; color: var(--ink); background: none; border: none; cursor: pointer; }
+  .model-dropdown .menu-item:hover { background: var(--bg-hover); }
+  .model-dropdown .menu-item.active { color: var(--accent-deep, #7a5a1a); font-weight: 600; }
+
 
   /* ── Smart follow-up suggestion chips ── */
   .followup-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

@@ -615,3 +615,109 @@ async def extract_items(
         "conversation_id": str(convo.id),
         "team_id": str(convo.team_id) if convo.team_id else None,
     }
+
+
+# ── ACP session control endpoints ──
+
+from app.schemas.conversation import SetSessionModeRequest, SetSessionModelRequest
+
+
+@router.post("/{conversation_id}/session/fork", response_model=ConversationDetail)
+async def fork_session(
+    conversation_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fork the ACP session: create a new conversation with copied agent context."""
+    from app.db.models.conversation import Conversation, Message
+    from sqlalchemy import select
+
+    convo = await _require_convo(db, conversation_id, user)
+    if not convo.acp_session_id:
+        raise HTTPException(status_code=400, detail="会话没有 ACP session，无法 fork")
+
+    # Create new conversation with same metadata
+    new_convo = Conversation(
+        title=f"Fork: {convo.title}",
+        icon=convo.icon,
+        owner_id=user.id,
+        team_id=convo.team_id,
+        project_id=convo.project_id,
+        primary_agent_id=convo.primary_agent_id,
+        active_agent_ids=list(convo.active_agent_ids),
+        profile_id=convo.profile_id,
+        session_mode=convo.session_mode,
+    )
+    db.add(new_convo)
+    await db.flush()
+
+    # Notify runner to fork the ACP session
+    from app.core import redis as R
+    await R.publish_control(str(conversation_id), {
+        "type": "fork",
+        "new_conversation_id": str(new_convo.id),
+    })
+
+    # Wait for runner response
+    resp = await R.wait_for_control_response(str(conversation_id), timeout=15.0)
+    new_session_id = resp.get("session_id")
+    if new_session_id:
+        new_convo.acp_session_id = new_session_id
+
+    await db.commit()
+    await db.refresh(new_convo)
+
+    # Return with empty messages
+    return ConversationDetail(
+        id=new_convo.id,
+        title=new_convo.title,
+        icon=new_convo.icon,
+        primary_agent_id=new_convo.primary_agent_id,
+        active_agent_ids=new_convo.active_agent_ids,
+        profile_id=new_convo.profile_id,
+        acp_session_id=new_convo.acp_session_id,
+        session_mode=new_convo.session_mode,
+        pinned=new_convo.pinned,
+        visibility=new_convo.visibility,
+        created_at=new_convo.created_at,
+        updated_at=new_convo.updated_at,
+        messages=[],
+    )
+
+
+@router.put("/{conversation_id}/session/mode")
+async def set_session_mode(
+    conversation_id: uuid.UUID,
+    body: SetSessionModeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set edit approval mode for the ACP session."""
+    convo = await _require_convo(db, conversation_id, user)
+    convo.session_mode = body.mode
+    await db.commit()
+    return {"ok": True, "mode": body.mode}
+
+
+@router.put("/{conversation_id}/session/model")
+async def set_session_model(
+    conversation_id: uuid.UUID,
+    body: SetSessionModelRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Switch the model for the active ACP session."""
+    from app.core import redis as R
+
+    convo = await _require_convo(db, conversation_id, user)
+    if not convo.acp_session_id:
+        raise HTTPException(status_code=400, detail="会话没有 ACP session")
+
+    await R.publish_control(str(conversation_id), {
+        "type": "model",
+        "model_id": body.model_id,
+    })
+    resp = await R.wait_for_control_response(str(conversation_id), timeout=10.0)
+    if resp.get("error"):
+        raise HTTPException(status_code=502, detail=f"Runner 未响应: {resp['error']}")
+    return {"ok": True, "model_id": body.model_id}
