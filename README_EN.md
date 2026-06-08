@@ -1,12 +1,12 @@
-# Hermes Python
+# Hermes Infi WebUI
 
-A self-hosted AI agent platform built on [Hermes Agent](https://github.com/NousResearch/hermes-agent). Multi-user, team-aware, with a web workspace for managing conversations, files, and projects — all powered by ACP (Agent Client Protocol) sessions running in the background.
+A self-hosted AI agent platform web interface built on [Hermes Agent](https://github.com/NousResearch/hermes-agent). Multi-user, team-aware, with a web workspace for managing conversations, files, and projects — all powered by ACP (Agent Client Protocol) sessions running in the background.
 
 中文 | **[English](README_EN.md)**
 
 ## What This Is
 
-Hermes Agent is a CLI-first AI coding agent. Hermes Python wraps it with a **web application layer**:
+Hermes Agent is a CLI-first AI coding agent. Hermes Infi WebUI wraps it with a **web application layer**:
 
 - **Multi-user auth** — JWT-based login, role-based access control (admin / member)
 - **Team collaboration** — create teams, invite members, manage shared conversations and knowledge bases
@@ -251,7 +251,7 @@ TypeScript build is strict (`noUnusedLocals`). Clean up unused imports before bu
 ## Project Structure
 
 ```
-hermes-python/
+hermes-infi-webui/
 ├── backend/
 │   ├── app/
 │   │   ├── api/v1/          # REST routes
