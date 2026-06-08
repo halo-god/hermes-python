@@ -888,37 +888,50 @@ class Runner:
         # Agent uses ACP session_id as Redis key, not conversation_id
         sid = clarify_session_id or conversation_id
         pending_key = f"hermes:clarify_pending:{sid}"
-        try:
+
+        # Retry: agent writes pending_key synchronously right before blocking,
+        # but the tool_call event may arrive at the runner *before* the Redis
+        # write is visible (network / GIL race). Poll briefly instead of giving up.
+        val = None
+        for _ in range(8):  # 8 × 100ms = 800ms window
             val = await R.get_redis().get(pending_key)
             if val:
-                await R.get_redis().delete(pending_key)
-                data = _json.loads(val)
-                clarify_id = data.get("clarify_id", str(uuid.uuid4()))
-                question = data.get("question", "需要确认")
-                options = data.get("options") or ["继续", "跳过"]
-                req_payload = {
-                    "id": clarify_id,
-                    "conversation_id": conversation_id,
-                    "message_id": message_id,
-                    "question": question,
-                    "questions": [{"question": question, "options": options, "allow_free_text": True}],
-                    "options": options or ["继续", "跳过"],
-                }
-                await R.publish_event(
-                    conversation_id,
-                    {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
-                )
-                logger.info("Clarify tool detected, sent confirmation_request: %s (sid=%s)", clarify_id, sid[:8])
-                acc["_clarify_handled"] = True
+                break
+            await asyncio.sleep(0.1)
 
-                # Start background task to wait for user response and unblock agent
-                t = asyncio.create_task(
-                    self._wait_and_unblock_clarify(conversation_id, clarify_id, clarify_session_id=sid)
-                )
-                self._bg_tasks.add(t)
-                t.add_done_callback(self._bg_tasks.discard)
+        if not val:
+            logger.warning("No pending clarify request found for sid=%s after retries", sid[:8])
+            return
+
+        try:
+            await R.get_redis().delete(pending_key)
+            data = _json.loads(val)
+            clarify_id = data.get("clarify_id", str(uuid.uuid4()))
+            question = data.get("question", "需要确认")
+            options = data.get("options") or ["继续", "跳过"]
+            req_payload = {
+                "id": clarify_id,
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "question": question,
+                "questions": [{"question": question, "options": options, "allow_free_text": True}],
+                "options": options or ["继续", "跳过"],
+            }
+            await R.publish_event(
+                conversation_id,
+                {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
+            )
+            logger.info("Clarify tool detected, sent confirmation_request: %s (sid=%s)", clarify_id, sid[:8])
+            acc["_clarify_handled"] = True
+
+            # Start background task to wait for user response and unblock agent
+            t = asyncio.create_task(
+                self._wait_and_unblock_clarify(conversation_id, clarify_id, clarify_session_id=sid)
+            )
+            self._bg_tasks.add(t)
+            t.add_done_callback(self._bg_tasks.discard)
         except Exception:
-            logger.debug("No pending clarify request found", exc_info=True)
+            logger.exception("Failed to handle clarify tool call for sid=%s", sid[:8])
 
     async def _wait_and_unblock_clarify(
         self, conversation_id: str, clarify_id: str,
