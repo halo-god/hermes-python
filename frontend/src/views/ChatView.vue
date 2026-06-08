@@ -16,7 +16,7 @@ import { teamsApi } from "@/api/teams";
 import { projectsApi } from "@/api/projects";
 import { renderMarkdown, renderMarkdownAsync } from "@/utils/markdown";
 import { fmtNum } from "@/utils/format";
-import type { Knowledge, Message, RoundtableReply, WsAdapter } from "@/types";
+import type { GroupMember, Knowledge, Message, RoundtableReply, WsAdapter } from "@/types";
 import type { SendOptions } from "@/components/Composer.vue";
 import type { Profile } from "@/api/agents";
 
@@ -128,6 +128,19 @@ const groupAgents = computed(() => {
     };
   });
 });
+
+const groupMembers = ref<GroupMember[]>([]);
+watch(
+  () => chat.activeId,
+  async (id) => {
+    if (id && isGroup.value) {
+      try { groupMembers.value = await conversationsApi.getMembers(id); } catch { groupMembers.value = []; }
+    } else {
+      groupMembers.value = [];
+    }
+  },
+  { immediate: true }
+);
 
 // Load team knowledge when the active conversation has a team_id
 watch(
@@ -935,6 +948,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           :is-group="isGroup"
           :group-agents="groupAgents"
+          :group-members="groupMembers"
           @send="onSend"
           @cancel="chat.cancel()"
         />

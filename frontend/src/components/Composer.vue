@@ -19,6 +19,7 @@ const props = defineProps<{
   knowledgeItems?: { id: string; name: string }[];
   isGroup?: boolean;
   groupAgents?: { agent_id: string; name: string; color: string; icon: string }[];
+  groupMembers?: { id: string; user_id: string | null; user_name?: string; agent_id: string | null }[];
 }>();
 export interface SendOptions {
   profileId?: string;
@@ -51,11 +52,24 @@ const mentionQuery = ref("");
 const mentionMentions = ref<string[]>([]); // collected agent_ids from @mentions
 
 const filteredAgents = computed(() => {
-  if (!props.groupAgents) return [];
+  if (!props.groupAgents && !props.groupMembers) return [];
   const q = mentionQuery.value.toLowerCase();
+  // AI agents
+  const agentItems = (props.groupAgents || []).map((a) => ({ ...a, _type: "agent" as const }));
+  // Human members (only those with user_id)
+  const humanItems = (props.groupMembers || [])
+    .filter((m) => m.user_id && !m.agent_id)
+    .map((m) => ({
+      agent_id: `user:${m.user_id}`,
+      name: m.user_name || m.user_id!.substring(0, 8),
+      color: "#4a9eff",
+      icon: "user",
+      _type: "human" as const,
+    }));
   const all = [
-    { agent_id: "__all__", name: "所有人", color: "#888", icon: "users" },
-    ...props.groupAgents,
+    { agent_id: "__all__", name: "所有人", color: "#888", icon: "users", _type: "all" as const },
+    ...agentItems,
+    ...humanItems,
   ];
   if (!q) return all;
   return all.filter(
@@ -272,6 +286,7 @@ function isImageFile(f: File) {
           <span class="mention-avatar" :style="{ background: a.color }"><Icon :name="a.icon" :size="11" /></span>
           <span class="mention-name">{{ a.name }}</span>
           <span v-if="a.agent_id === '__all__'" class="mention-tag">圆桌</span>
+          <span v-else-if="a._type === 'human'" class="mention-tag">成员</span>
         </button>
       </div>
       <textarea

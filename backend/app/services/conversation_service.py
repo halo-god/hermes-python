@@ -360,6 +360,7 @@ async def send_roundtable(
     attached_file_ids: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
     system_prompt: str | None = None,
+    mentions: list[str] | None = None,
 ) -> tuple[Message, Message]:
     """Multi-agent turn: one roundtable message holding per-agent replies + a
     synthesized merge. The runner streams each reply in parallel, then merges."""
@@ -368,7 +369,7 @@ async def send_roundtable(
     if attached:
         user_content["files"] = attached
     user_msg = Message(
-        conversation_id=convo.id, owner_id=owner_id, role="user", content=user_content, status="complete"
+        conversation_id=convo.id, owner_id=owner_id, role="user", content=user_content, mentions=mentions or [], status="complete"
     )
     rt_msg = Message(
         conversation_id=convo.id,
@@ -897,7 +898,7 @@ async def dispatch_group(
             owner_id=owner_id,
             role="user",
             content={"text": text},
-            mentions=[],
+            mentions=mentions,
             status="complete",
         )
         db.add(user_msg)
@@ -915,13 +916,13 @@ async def dispatch_group(
             resolved = all_agents
 
     if not resolved:
-        # mention模式 + 没有@任何人：只存消息，不触发Agent
+        # mention模式 + 没有@任何Agent：只存消息，不触发Agent
         user_msg = Message(
             conversation_id=convo.id,
             owner_id=owner_id,
             role="user",
             content={"text": text},
-            mentions=[],
+            mentions=mentions,
             status="complete",
         )
         db.add(user_msg)
@@ -938,7 +939,7 @@ async def dispatch_group(
             owner_id=owner_id,
             role="user",
             content={"text": text},
-            mentions=resolved,
+            mentions=mentions,
             status="complete",
         )
         db.add(user_msg)
@@ -974,4 +975,5 @@ async def dispatch_group(
         attached_file_ids=attached_file_ids,
         owner_id=owner_id,
         system_prompt=system_prompt,
+        mentions=mentions,
     )
