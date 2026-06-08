@@ -124,7 +124,7 @@ async function saveNotifyPrefs() {
       </div>
     </div>
 
-    <div class="team-body" style="max-width: 760px">
+    <div class="team-body" >
 
       <!-- ── 个人资料 ── -->
       <template v-if="tab === 'profile'">

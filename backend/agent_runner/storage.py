@@ -35,7 +35,8 @@ def _kind_of(name: str) -> str:
 
 
 async def save_file(
-    conversation_id: uuid.UUID, path: str, content: str, agent_id: str | None
+    conversation_id: uuid.UUID, path: str, content: str, agent_id: str | None,
+    message_id: uuid.UUID | None = None,
 ) -> WorkspaceFile:
     # Preserve full relative path for folder support (e.g., "src/main.py")
     # Normalize: remove leading ./ and /
@@ -82,6 +83,7 @@ async def save_file(
         if f is None:
             f = WorkspaceFile(
                 conversation_id=conversation_id,
+                message_id=message_id,
                 name=name,
                 kind=kind,
                 content=inline,

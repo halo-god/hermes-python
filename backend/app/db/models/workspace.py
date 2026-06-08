@@ -24,6 +24,11 @@ class WorkspaceFile(UUIDPrimaryKey, Timestamps, Base):
         ForeignKey("conversations.id", ondelete="CASCADE"),
         index=True,
     )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), default="md")  # md|docx|csv|json|txt
     current_version: Mapped[int] = mapped_column(Integer, default=1)

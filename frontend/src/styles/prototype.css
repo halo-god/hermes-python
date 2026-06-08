@@ -1589,6 +1589,8 @@
   /* ───── Admin console ───── */
   .admin-hero {
     padding: 22px 40px 0;
+    max-width: 1400px;
+    margin: 0 auto;
     border-bottom: 1px solid var(--rule-soft);
     background:
       radial-gradient(120% 60% at 80% 0%, rgba(184,133,42,0.06), transparent 60%),

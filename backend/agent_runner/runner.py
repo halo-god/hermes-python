@@ -406,7 +406,7 @@ class Runner:
                         })
 
             async def on_fs(path: str, content: str) -> None:
-                f = await storage.save_file(uuid.UUID(conversation_id), path, content, aid)
+                f = await storage.save_file(uuid.UUID(conversation_id), path, content, aid, uuid.UUID(message_id))
                 await R.publish_event(conversation_id, {
                     "type": "file", "message_id": message_id, "file_id": str(f.id),
                     "name": f.name, "kind": f.kind, "version": f.current_version,
@@ -664,7 +664,8 @@ class Runner:
             import difflib
             old_content = await storage.get_existing_content(uuid.UUID(conversation_id), path)
             f = await storage.save_file(
-                uuid.UUID(conversation_id), path, content, agent_id
+                uuid.UUID(conversation_id), path, content, agent_id,
+                uuid.UUID(acc["current_msg_id"]),
             )
             diff: str | None = None
             if old_content is not None:
@@ -1164,7 +1165,7 @@ class Runner:
         # Save extracted files
         for filename, content in unique:
             try:
-                f = await storage.save_file(cid, filename, content, agent_id)
+                f = await storage.save_file(cid, filename, content, agent_id, uuid.UUID(message_id))
                 await R.publish_event(
                     conversation_id,
                     {

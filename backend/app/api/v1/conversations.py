@@ -48,6 +48,40 @@ from app.services import conversation_service as svc
 router = APIRouter()
 
 
+async def _enrich_messages_with_files(
+    db: AsyncSession, msgs: list, conversation_id: uuid.UUID
+) -> list[MessageOut]:
+    """Attach workspace files to message content.files for persisted messages."""
+    from sqlalchemy import select
+
+    msg_ids = [m.id for m in msgs]
+    if not msg_ids:
+        return [MessageOut.model_validate(m) for m in msgs]
+
+    # Fetch files linked to these messages
+    res = await db.execute(
+        select(WorkspaceFile).where(
+            WorkspaceFile.conversation_id == conversation_id,
+            WorkspaceFile.message_id.isnot(None),
+            WorkspaceFile.message_id.in_(msg_ids),
+        )
+    )
+    files_by_msg: dict[uuid.UUID, list[dict]] = {}
+    for f in res.scalars().all():
+        files_by_msg.setdefault(f.message_id, []).append(
+            {"id": str(f.id), "name": f.name, "kind": f.kind}
+        )
+
+    result = []
+    for m in msgs:
+        out = MessageOut.model_validate(m)
+        file_list = files_by_msg.get(m.id)
+        if file_list:
+            out.content = {**out.content, "files": file_list}
+        result.append(out)
+    return result
+
+
 async def _require_convo(db, conversation_id: uuid.UUID, user: User):
     convo = await svc.get_conversation(db, conversation_id, user.id)
     if convo is None:
@@ -113,9 +147,10 @@ async def get_conversation(
     convo = await _require_convo(db, conversation_id, user)
     # Initial load: last 50 messages
     msgs = await svc.get_messages(db, convo.id, limit=50)
+    enriched = await _enrich_messages_with_files(db, msgs, convo.id)
     return ConversationDetail(
         **ConversationOut.model_validate(convo).model_dump(),
-        messages=[MessageOut.model_validate(m) for m in msgs],
+        messages=enriched,
     )
 
 
@@ -130,7 +165,7 @@ async def get_messages_page(
     """Paginated message fetch. Use *before* cursor for infinite scroll (load older)."""
     await _require_convo(db, conversation_id, user)
     msgs = await svc.get_messages(db, conversation_id, limit=limit, before_id=before)
-    return [MessageOut.model_validate(m) for m in msgs]
+    return await _enrich_messages_with_files(db, msgs, conversation_id)
 
 
 @router.patch("/{conversation_id}", response_model=ConversationOut)
