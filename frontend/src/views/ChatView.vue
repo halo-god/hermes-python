@@ -23,6 +23,7 @@ import type { Profile } from "@/api/agents";
 // Lazy-load heavy components (split from main bundle)
 const WorkspacePanel = defineAsyncComponent(() => import("@/components/WorkspacePanel.vue"));
 const ExtractItemsModal = defineAsyncComponent(() => import("@/components/ExtractItemsModal.vue"));
+const MemberPanel = defineAsyncComponent(() => import("@/components/MemberPanel.vue"));
 
 const chat = useChatStore();
 const ns = useNotificationStore();
@@ -33,6 +34,7 @@ const draft = ref("");
 const scroller = ref<HTMLElement | null>(null);
 const loadMoreSentinel = ref<HTMLElement | null>(null);
 const showWorkspace = ref(false);
+const showMemberPanel = ref(false);
 const showExtractModal = ref(false);
 const landingProfileId = ref<string>("");
 const teamKnowledge = ref<Knowledge[]>([]);
@@ -695,6 +697,9 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
             <button class="thread-action text-mute-sm" v-if="chat.files.length" @click="showWorkspace = !showWorkspace" style="flex-shrink:0;margin-top:2px">
               <Icon name="folder" /> 工作区 ({{ chat.files.length }})
             </button>
+            <button class="thread-action text-mute-sm" v-if="isGroup" @click="showMemberPanel = !showMemberPanel" :style="{ flexShrink: '0', marginTop: '2px', color: showMemberPanel ? 'var(--accent)' : undefined }">
+              <Icon name="users" /> 成员
+            </button>
             <button class="thread-action text-mute-sm" v-if="chat.messages.length >= 2" @click="showExtractModal = true" style="flex-shrink:0;margin-top:2px" title="从对话内容自动创建项目与任务">
               <Icon name="sparkle" /> 智能创建
             </button>
@@ -929,6 +934,13 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
         :adapter="wsAdapter"
         :initial-file-id="openFileId || undefined"
         @close="showWorkspace = false; openFileId = null"
+      />
+
+      <MemberPanel
+        v-if="showMemberPanel && isGroup && chat.activeId"
+        :conversation-id="chat.activeId"
+        :agents="groupAgents"
+        @close="showMemberPanel = false"
       />
     </div>
   </div>
