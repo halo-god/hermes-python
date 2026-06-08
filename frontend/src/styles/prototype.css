@@ -1628,9 +1628,11 @@
   .admin-tabs {
     display: flex; gap: 2px;
     overflow-x: auto;
-    margin-left: -4px; padding-left: 4px;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 4px;
   }
-  .admin-body { padding: 24px 0 60px; width: 100%; }
+  .admin-body { padding: 24px 40px 60px; width: 100%; max-width: 1400px; margin: 0 auto; }
 
   /* admin user table */
   .users-toolbar {
