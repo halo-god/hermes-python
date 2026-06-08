@@ -44,6 +44,7 @@ class AddMemberRequest(BaseModel):
 class ConversationUpdate(BaseModel):
     title: str | None = None
     pinned: bool | None = None
+    channel_mode: str | None = None
 
 
 class MessageOut(BaseModel):
@@ -76,6 +77,7 @@ class ConversationOut(BaseModel):
     session_mode: str | None = None
     pinned: bool
     visibility: str
+    channel_mode: str = "mention"
     created_at: datetime
     updated_at: datetime
 

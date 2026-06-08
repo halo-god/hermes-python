@@ -36,7 +36,8 @@ class Conversation(UUIDPrimaryKey, Timestamps, Base):
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     visibility: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
     is_channel: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # description: Mapped[str | None] = mapped_column(Text)  # 群聊描述，后续版本启用
+    channel_mode: Mapped[str] = mapped_column(String(16), default="mention", nullable=False)
+    # "off" | "mention" | "always" — 群聊AI回复模式，继承自团队
 
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation",

@@ -177,6 +177,7 @@ export interface Conversation {
   session_mode?: string | null;
   pinned: boolean;
   visibility: string;
+  channel_mode?: string;
   team_id: string | null;
   project_id: string | null;
   project_name: string | null;

@@ -36,7 +36,7 @@ export const conversationsApi = {
   async get(id: string): Promise<ConversationDetail> {
     return (await http.get<ConversationDetail>(`/conversations/${id}`)).data;
   },
-  async update(id: string, payload: { title?: string; pinned?: boolean }): Promise<Conversation> {
+  async update(id: string, payload: { title?: string; pinned?: boolean; channel_mode?: string }): Promise<Conversation> {
     return (await http.patch<Conversation>(`/conversations/${id}`, payload)).data;
   },
   async setAgents(id: string, agentIds: string[]): Promise<Conversation> {

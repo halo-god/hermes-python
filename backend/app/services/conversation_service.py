@@ -613,8 +613,36 @@ async def create_group(
     member_agent_ids: list[str] | None = None,
     team_id: uuid.UUID | None = None,
 ) -> Conversation:
-    """创建群聊，自动添加成员。"""
+    """创建群聊，自动添加成员。有团队时默认包含全部成员+助手。"""
     from app.db.models.conversation import GroupMember
+    from app.db.models.team import Team, TeamMember as TM
+
+    # If team_id, auto-populate members + agents from team
+    channel_mode = "mention"
+    if team_id:
+        team = await db.get(Team, team_id)
+        if team:
+            channel_mode = team.channel_mode or "mention"
+            # Auto-add all team human members (when not explicitly provided)
+            if not member_user_ids:
+                res = await db.execute(
+                    select(TM.user_id).where(TM.team_id == team_id)
+                )
+                member_user_ids = [row[0] for row in res.all()]
+            # Auto-add team shared agents (when not explicitly provided)
+            if not member_agent_ids:
+                agent_ids = list(team.shared_agents or ["hermes"])
+                # Also resolve shared_profile_ids → agent_ids
+                if team.shared_profile_ids:
+                    from app.db.models.agent import Profile as ProfileModel
+                    for pid in team.shared_profile_ids:
+                        try:
+                            p = await db.get(ProfileModel, uuid.UUID(pid))
+                            if p and p.default_agent_id and p.default_agent_id not in agent_ids:
+                                agent_ids.append(p.default_agent_id)
+                        except Exception:
+                            pass
+                member_agent_ids = agent_ids
 
     agent_ids = member_agent_ids or ["hermes"]
     convo = Conversation(
@@ -624,6 +652,7 @@ async def create_group(
         primary_agent_id=agent_ids[0],
         active_agent_ids=agent_ids,
         team_id=team_id,
+        channel_mode=channel_mode,
         visibility="private" if not team_id else "team",
     )
     db.add(convo)
@@ -636,9 +665,11 @@ async def create_group(
         role="admin",
     ))
 
-    # Add other human members
+    # Add other human members (dedupe against owner)
+    added_users = {owner_id}
     for uid in (member_user_ids or []):
-        if uid != owner_id:
+        if uid not in added_users:
+            added_users.add(uid)
             db.add(GroupMember(
                 conversation_id=convo.id,
                 user_id=uid,
@@ -851,12 +882,40 @@ async def dispatch_group(
     mentions: list[str],
     attached_file_ids: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
+    skip_agent: bool = False,
 ) -> tuple[Message, Message | None]:
-    """群聊消息路由：按 mentions 决定走人→人 / 人→机 / 圆桌。"""
+    """群聊消息路由：按 channel_mode + mentions 决定走人→人 / 人→机 / 圆桌。"""
     resolved = await resolve_mentions(db, convo.id, mentions)
 
+    # channel_mode gating
+    mode = getattr(convo, "channel_mode", "mention") or "mention"
+
+    if mode == "off" or skip_agent:
+        # off模式或前端显式跳过：只存消息，不触发Agent
+        user_msg = Message(
+            conversation_id=convo.id,
+            owner_id=owner_id,
+            role="user",
+            content={"text": text},
+            mentions=[],
+            status="complete",
+        )
+        db.add(user_msg)
+        if convo.title == "新会话":
+            convo.title = text[:40]
+        await db.commit()
+        await db.refresh(user_msg)
+        return user_msg, None
+
+    if mode == "always" and not resolved:
+        # always模式：没有@特定人时，所有agent都回复（圆桌）
+        members = await get_group_members(db, convo.id)
+        all_agents = [m.agent_id for m in members if m.agent_id]
+        if all_agents:
+            resolved = all_agents
+
     if not resolved:
-        # 人→人模式：只存消息，不触发Agent
+        # mention模式 + 没有@任何人：只存消息，不触发Agent
         user_msg = Message(
             conversation_id=convo.id,
             owner_id=owner_id,

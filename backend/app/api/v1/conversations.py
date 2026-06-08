@@ -264,6 +264,7 @@ async def send_message(
             db, convo, payload.text, payload.mentions,
             attached_file_ids=payload.attached_file_ids,
             owner_id=user.id,
+            skip_agent=payload.skip_agent,
         )
     else:
         user_msg, agent_msg = await svc.dispatch(

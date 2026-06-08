@@ -502,6 +502,18 @@ async function sendFollowup(text: string) {
   await onSend();
 }
 
+async function onChannelModeChange(mode: string) {
+  if (!chat.activeId) return;
+  try {
+    await conversationsApi.update(chat.activeId, { channel_mode: mode });
+    // Update local state
+    const idx = chat.conversations.findIndex((c) => c.id === chat.activeId);
+    if (idx !== -1) chat.conversations[idx].channel_mode = mode;
+  } catch (e) {
+    console.error('[onChannelModeChange] failed:', e);
+  }
+}
+
 // ── Knowledge reference display filter ──
 function extractKnowledgeRefs(text: string): string[] {
   const refs: string[] = [];
@@ -940,7 +952,9 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
         v-if="showMemberPanel && isGroup && chat.activeId"
         :conversation-id="chat.activeId"
         :agents="groupAgents"
+        :channel-mode="activeConvo?.channel_mode || 'mention'"
         @close="showMemberPanel = false"
+        @update:channel-mode="onChannelModeChange"
       />
     </div>
   </div>
