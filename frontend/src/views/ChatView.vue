@@ -677,7 +677,8 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
 
     <!-- THREAD -->
     <div v-else class="thread-split" :class="{ 'ws-closed': !showWorkspace }">
-      <div ref="scroller" class="thread">
+      <!-- Fixed header: title + action buttons (outside scroll container) -->
+      <div class="thread-head-wrap">
         <div class="thread-inner">
           <div class="thread-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;">
             <div style="flex:1;min-width:0;display:flex;align-items:flex-start;gap:10px;">
@@ -781,7 +782,12 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
               </div>
             </div>
           </div>
+        </div>
+      </div>
 
+      <!-- Scrollable message area -->
+      <div ref="scroller" class="thread">
+        <div class="thread-inner">
           <!-- messages (virtual scroll) -->
           <div v-if="chat.hasMoreMessages || chat.loadingOlder" ref="loadMoreSentinel" class="load-more-sentinel">
             <span v-if="chat.loadingOlder" class="loading-spinner"></span>
