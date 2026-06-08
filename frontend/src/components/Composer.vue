@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /* 1:1 port of the prototype composer (hermes-app.js Composer): rich toolbar +
    profile dropdown (ACP) + circular send button. */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import Icon from "@/components/Icon.vue";
 import { agentsApi, type Profile } from "@/api/agents";
 import { useNotificationStore } from "@/stores/notifications";
@@ -16,6 +16,8 @@ const props = defineProps<{
   autofocus?: boolean;
   conversationId?: string;
   knowledgeItems?: { id: string; name: string }[];
+  isGroup?: boolean;
+  groupAgents?: { agent_id: string; name: string; color: string; icon: string }[];
 }>();
 export interface SendOptions {
   profileId?: string;
@@ -23,6 +25,7 @@ export interface SendOptions {
   deepThink?: boolean;
   stagedFiles?: File[];
   knowledgeIds?: string[];
+  mentions?: string[];
 }
 
 const emit = defineEmits<{ "update:modelValue": [string]; send: [SendOptions]; cancel: [] }>();
@@ -40,6 +43,24 @@ const selected = ref<Profile | null>(null);
 const stagedFiles = ref<File[]>([]);
 const stagedKnowledge = ref<{ id: string; name: string }[]>([]);
 const stagedPreviews = ref<Map<number, string>>(new Map());
+
+// @mention state
+const showMentionPicker = ref(false);
+const mentionQuery = ref("");
+const mentionMentions = ref<string[]>([]); // collected agent_ids from @mentions
+
+const filteredAgents = computed(() => {
+  if (!props.groupAgents) return [];
+  const q = mentionQuery.value.toLowerCase();
+  const all = [
+    { agent_id: "__all__", name: "所有人", color: "#888", icon: "users" },
+    ...props.groupAgents,
+  ];
+  if (!q) return all;
+  return all.filter(
+    (a) => a.name.toLowerCase().includes(q) || a.agent_id.toLowerCase().includes(q)
+  );
+});
 
 onMounted(async () => {
   document.addEventListener("mousedown", onDocClick);
@@ -72,8 +93,23 @@ function autoresize() {
   el.style.height = Math.min(220, Math.max(el.scrollHeight, 84)) + "px";
 }
 function onInput(e: Event) {
-  emit("update:modelValue", (e.target as HTMLTextAreaElement).value);
+  const val = (e.target as HTMLTextAreaElement).value;
+  emit("update:modelValue", val);
   autoresize();
+
+  // Detect @mention trigger
+  if (props.isGroup && props.groupAgents?.length) {
+    const cursor = (e.target as HTMLTextAreaElement).selectionStart || val.length;
+    const beforeCursor = val.slice(0, cursor);
+    const atMatch = beforeCursor.match(/@(\S*)$/);
+    if (atMatch) {
+      showMentionPicker.value = true;
+      mentionQuery.value = atMatch[1];
+    } else {
+      showMentionPicker.value = false;
+      mentionQuery.value = "";
+    }
+  }
 }
 function onKey(e: KeyboardEvent) {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -84,10 +120,44 @@ function onKey(e: KeyboardEvent) {
 function doSend() {
   const files = stagedFiles.value.length ? [...stagedFiles.value] : undefined;
   const kIds = stagedKnowledge.value.length ? stagedKnowledge.value.map((k) => k.id) : undefined;
+
+  // Extract @mentions from text
+  const mentions = [...mentionMentions.value];
+  mentionMentions.value = [];
+
   stagedFiles.value = [];
   stagedPreviews.value = new Map();
   stagedKnowledge.value = [];
-  emit("send", { profileId: selected.value?.id, webSearch: webSearch.value, deepThink: deepThink.value, stagedFiles: files, knowledgeIds: kIds });
+  emit("send", { profileId: selected.value?.id, webSearch: webSearch.value, deepThink: deepThink.value, stagedFiles: files, knowledgeIds: kIds, mentions });
+}
+
+function selectMention(agent: { agent_id: string; name: string }) {
+  // Replace the @query in the text with @name
+  const taEl = ta.value;
+  if (!taEl) return;
+  const val = props.modelValue;
+  const cursor = taEl.selectionStart || val.length;
+  const beforeCursor = val.slice(0, cursor);
+  const afterCursor = val.slice(cursor);
+  const newBefore = beforeCursor.replace(/@\S*$/, `@${agent.name} `);
+  const newVal = newBefore + afterCursor;
+  emit("update:modelValue", newVal);
+  showMentionPicker.value = false;
+  mentionQuery.value = "";
+
+  // Track the mention
+  if (agent.agent_id === "__all__") {
+    mentionMentions.value = ["__all__"];
+  } else if (!mentionMentions.value.includes(agent.agent_id)) {
+    mentionMentions.value.push(agent.agent_id);
+  }
+
+  // Restore focus
+  nextTick(() => {
+    taEl.focus();
+    const newCursor = newBefore.length;
+    taEl.setSelectionRange(newCursor, newCursor);
+  });
 }
 function pickProfile(p: Profile) {
   selected.value = p;
@@ -189,6 +259,19 @@ function isImageFile(f: File) {
       </span>
     </div>
     <div class="composer">
+      <!-- @mention picker -->
+      <div v-if="showMentionPicker && filteredAgents.length" class="mention-picker">
+        <button
+          v-for="a in filteredAgents"
+          :key="a.agent_id"
+          class="mention-item"
+          @mousedown.prevent="selectMention(a)"
+        >
+          <span class="mention-avatar" :style="{ background: a.color }"><Icon :name="a.icon" :size="11" /></span>
+          <span class="mention-name">{{ a.name }}</span>
+          <span v-if="a.agent_id === '__all__'" class="mention-tag">圆桌</span>
+        </button>
+      </div>
       <textarea
         ref="ta"
         class="composer-input"
@@ -280,3 +363,60 @@ function isImageFile(f: File) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.mention-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  margin-bottom: 4px;
+  z-index: 10;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 120ms;
+}
+.mention-item:hover {
+  background: var(--accent-tint);
+}
+.mention-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  flex-shrink: 0;
+}
+.mention-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  flex: 1;
+}
+.mention-tag {
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+</style>

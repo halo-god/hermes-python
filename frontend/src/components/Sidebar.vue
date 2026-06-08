@@ -6,6 +6,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import Icon from "@/components/Icon.vue";
 import NewTeamModal from "@/components/NewTeamModal.vue";
+import NewGroupModal from "@/components/NewGroupModal.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import { useNotificationStore } from "@/stores/notifications";
@@ -20,6 +21,10 @@ const route = useRoute();
 const { theme, toggleTheme } = useTheme();
 const { t } = useI18n();
 const showNewTeam = ref(false);
+const showNewGroup = ref(false);
+
+const groupConversations = computed(() => chat.conversations.filter((c) => c.type === "group"));
+const personalConversations = computed(() => chat.conversations.filter((c) => c.type !== "group"));
 
 const isAdmin = computed(() => auth.user?.role === "super_admin" || auth.user?.role === "admin");
 const onChat = computed(() => route.name === "home");
@@ -167,10 +172,45 @@ async function shareConvo(id: string) {
         <div v-if="!chat.teams.length" style="padding: 4px 12px; font-size: 12px; color: var(--ink-mute)">还没有团队</div>
       </div>
 
+      <div class="side-label">
+        📢 群聊
+        <button title="创建群聊" @click="showNewGroup = true">+</button>
+      </div>
+      <div class="convo-list" style="margin-bottom: 8px">
+        <div
+          v-for="c in groupConversations"
+          :key="c.id"
+          class="convo"
+          :class="{ active: onChat && c.id === chat.activeId }"
+          @click="openConvo(c.id)"
+          @contextmenu="onCtxMenu($event, c.id)"
+        >
+          <div class="convo-ico group-ico">
+            <span v-if="c.id === chat.streamingConvoId" class="convo-live-ring"></span>
+            <Icon v-else name="users" />
+          </div>
+          <template v-if="renamingId === c.id">
+            <input
+              v-model="renameVal"
+              class="convo-rename-input"
+              @keydown.enter="confirmRename"
+              @keydown.escape="renamingId = null"
+              @blur="confirmRename"
+              autofocus
+            />
+          </template>
+          <template v-else>
+            <div class="convo-title">{{ c.title }}</div>
+          </template>
+          <span v-if="c.id === chat.streamingConvoId" class="convo-live-label">生成中</span>
+        </div>
+        <div v-if="!groupConversations.length" style="padding: 4px 12px; font-size: 11px; color: var(--ink-mute)">暂无群聊</div>
+      </div>
+
       <div class="side-label">{{ t('nav.conversations') }}</div>
       <div class="convo-list">
         <div
-          v-for="c in chat.conversations"
+          v-for="c in personalConversations"
           :key="c.id"
           class="convo"
           :class="{ active: onChat && c.id === chat.activeId }"
@@ -258,6 +298,7 @@ async function shareConvo(id: string) {
   </Teleport>
 
   <NewTeamModal v-if="showNewTeam" @close="showNewTeam = false" @created="onTeamCreated" />
+  <NewGroupModal v-if="showNewGroup" @close="showNewGroup = false" @created="(id: string) => { showNewGroup = false; openConvo(id); }" />
 </template>
 
 <style scoped>
@@ -325,5 +366,8 @@ async function shareConvo(id: string) {
 }
 .danger-btn:hover {
   background: #c82333 !important;
+}
+.group-ico {
+  color: var(--accent) !important;
 }
 </style>

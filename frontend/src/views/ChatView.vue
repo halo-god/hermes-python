@@ -112,6 +112,19 @@ const primaryProfile = computed(() => {
   const aid = activeConvo.value?.primary_agent_id;
   return aid ? chat.profiles.find((p) => p.default_agent_id === aid) || null : landingProfile.value;
 });
+const isGroup = computed(() => activeConvo.value?.type === "group");
+const groupAgents = computed(() => {
+  if (!isGroup.value || !activeConvo.value) return [];
+  return (activeConvo.value.active_agent_ids || []).map((aid) => {
+    const p = chat.profiles.find((pp) => pp.default_agent_id === aid);
+    return {
+      agent_id: aid,
+      name: p?.name || aid,
+      color: p?.color || "#b8852a",
+      icon: p?.icon || "sparkle",
+    };
+  });
+});
 
 // Load team knowledge when the active conversation has a team_id
 watch(
@@ -861,6 +874,8 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :conversation-id="chat.activeId || undefined"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
+          :is-group="isGroup"
+          :group-agents="groupAgents"
           @send="onSend"
           @cancel="chat.cancel()"
         />
