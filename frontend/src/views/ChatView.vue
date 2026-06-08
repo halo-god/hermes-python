@@ -257,6 +257,16 @@ function onMeasure(el: HTMLElement, _index: number) {
   }
 }
 
+// Re-measure virtual items when streaming message content grows.
+// Without this, the virtualizer keeps the initially-measured height
+// while the DOM grows, causing content to appear clipped / "not refreshing".
+watch(
+  () => chat.messages.map((m) => m.content.text).join("|"),
+  () => {
+    nextTick(() => virtualizer.value.measure());
+  },
+);
+
 const openFileId = ref<string | null>(null);
 
 function fmtTime(iso: string) {
