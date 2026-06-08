@@ -3,6 +3,7 @@
    profile dropdown (ACP) + circular send button. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import Icon from "@/components/Icon.vue";
+import ProfileListItem from "@/components/ProfileListItem.vue";
 import { agentsApi, type Profile } from "@/api/agents";
 import { useNotificationStore } from "@/stores/notifications";
 
@@ -328,26 +329,14 @@ function isImageFile(f: File) {
           </button>
           <div v-if="showProfile" class="menu" style="bottom: 110%; right: 0; min-width: 320px">
             <div class="menu-label">个人 Profile</div>
-            <button v-for="p in personal" :key="p.id" class="menu-item profile-item" :class="{ active: selected?.id === p.id }" @click="pickProfile(p)">
-              <span class="profile-avatar" :style="{ background: p.color }"><Icon :name="p.icon" /></span>
-              <div class="profile-meta"><div class="profile-name">{{ p.name }} <span class="profile-handle">@{{ p.handle }}</span></div><div class="profile-desc">{{ p.desc }}</div></div>
-              <span class="profile-tag">{{ p.default_model }}</span>
-            </button>
+            <ProfileListItem v-for="p in personal" :key="p.id" :profile="p" :active="selected?.id === p.id" @pick="pickProfile" />
             <div class="menu-sep"></div>
             <div class="menu-label">团队 Profile · 共享记忆</div>
-            <button v-for="p in team" :key="p.id" class="menu-item profile-item" :class="{ active: selected?.id === p.id }" @click="pickProfile(p)">
-              <span class="profile-avatar" :style="{ background: p.color }"><Icon :name="p.icon" /></span>
-              <div class="profile-meta"><div class="profile-name">{{ p.name }} <span class="profile-handle">@{{ p.handle }}</span></div><div class="profile-desc">{{ p.desc }}</div></div>
-              <span class="profile-tag">{{ p.default_model }}</span>
-            </button>
+            <ProfileListItem v-for="p in team" :key="p.id" :profile="p" :active="selected?.id === p.id" @pick="pickProfile" />
             <template v-if="globalProfiles.length">
               <div class="menu-sep"></div>
               <div class="menu-label">全局 Profile</div>
-              <button v-for="p in globalProfiles" :key="p.id" class="menu-item profile-item" :class="{ active: selected?.id === p.id }" @click="pickProfile(p)">
-                <span class="profile-avatar" :style="{ background: p.color }"><Icon :name="p.icon" /></span>
-                <div class="profile-meta"><div class="profile-name">{{ p.name }} <span class="profile-handle">@{{ p.handle }}</span></div><div class="profile-desc">{{ p.desc }}</div></div>
-                <span class="profile-tag">{{ p.default_model }}</span>
-              </button>
+              <ProfileListItem v-for="p in globalProfiles" :key="p.id" :profile="p" :active="selected?.id === p.id" @pick="pickProfile" />
             </template>
             <div class="menu-foot-acp"><Icon name="bolt" /> 通过 ACP · v1 协议建立会话</div>
           </div>
