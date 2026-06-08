@@ -299,12 +299,13 @@ async def stream(
                     continue
                 data = msg["data"]
                 yield f"data: {data}\n\n"
-                # Close the stream once the turn is done.
-                try:
-                    if json.loads(data).get("type") == "done":
-                        break
-                except (TypeError, ValueError):
-                    pass
+                # NOTE: We no longer close the stream on "done".
+                # The frontend owns the lifecycle: it calls closeStream() ~500ms after
+                # receiving "done" (unless a follow-up "start" cancels the timer).
+                # Closing here breaks the clarify-resume flow: after a tool split the
+                # runner emits "done" then immediately "start" + tokens, but the
+                # old "done"-closes-stream logic dropped the follow-up events because
+                # EventSource does NOT auto-reconnect on a clean server close.
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()
