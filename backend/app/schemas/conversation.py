@@ -22,7 +22,7 @@ class GroupCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     member_user_ids: list[uuid.UUID] = Field(default_factory=list)
     member_agent_ids: list[str] = Field(default_factory=list)
-    team_id: uuid.UUID | None = None
+    team_id: uuid.UUID
 
 
 class GroupMemberOut(BaseModel):
