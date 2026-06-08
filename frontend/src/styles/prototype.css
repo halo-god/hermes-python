@@ -1589,14 +1589,12 @@
   /* ───── Admin console ───── */
   .admin-hero {
     padding: 22px 40px 0;
-    max-width: 1400px;
-    margin: 0 auto;
     border-bottom: 1px solid var(--rule-soft);
     background:
       radial-gradient(120% 60% at 80% 0%, rgba(184,133,42,0.06), transparent 60%),
       var(--bg-canvas);
   }
-  .admin-hero-row { display: flex; align-items: center; gap: 14px; }
+  .admin-hero-row { display: flex; align-items: center; gap: 14px; max-width: 1400px; margin: 0 auto; }
   .admin-badge {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px;
@@ -1613,9 +1611,10 @@
     font-family: var(--font-serif);
     font-size: 30px;
     font-weight: 500;
-    margin: 8px 0 4px;
+    margin: 8px auto 4px;
     letter-spacing: -0.005em;
     line-height: 1.1;
+    max-width: 1400px;
   }
   .admin-title em { font-style: italic; color: var(--accent); font-weight: 500; }
   .admin-sub {
@@ -1623,7 +1622,8 @@
     font-style: italic;
     color: var(--ink-soft);
     font-size: 15px;
-    margin-bottom: 18px;
+    margin: 0 auto 18px;
+    max-width: 1400px;
   }
   .admin-tabs {
     display: flex; gap: 2px;
