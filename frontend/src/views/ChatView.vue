@@ -178,6 +178,25 @@ function md(text: string) {
   return renderMarkdown(text);
 }
 
+// ── @mention highlighting for group chats ──
+function highlightMentions(html: string): string {
+  if (!isGroup.value) return html;
+  return html.replace(/@([\w-]+)/g, (_match, agentId) => {
+    const profile = chat.profiles.find(p => p.default_agent_id === agentId);
+    const name = profile?.name || agentId;
+    const color = profile?.color || '#b8852a';
+    return `<span class="mention-tag" style="background:${color}22;color:${color};border:1px solid ${color}44">@${name}</span>`;
+  });
+}
+
+// ── Get user display info for group chat messages ──
+function getUserDisplay(msg: Message): { name: string; initials: string; color: string } {
+  if (msg.owner_id) {
+    return { name: '用户', initials: 'U', color: '#666' };
+  }
+  return { name: '你', initials: '我', color: 'var(--accent)' };
+}
+
 // Post-process Mermaid blocks after DOM updates
 watch(() => chat.messages.length, async () => {
   await nextTick();
@@ -777,13 +796,25 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
             </div>
 
             <!-- normal message -->
+            <div v-else-if="chat.messages[row.index].role === 'system'" class="msg system-msg">
+              <div class="system-msg-body">
+                <Icon name="info" :size="12" />
+                <span>{{ chat.messages[row.index].content.text }}</span>
+              </div>
+            </div>
             <div v-else class="msg" :class="chat.messages[row.index].role">
               <div v-if="chat.messages[row.index].role === 'agent'" class="msg-avatar" :style="{ background: profileDisplay(profileByAgentId(chat.messages[row.index].agent_id || 'hermes')).color }">
                 <Icon :name="profileDisplay(profileByAgentId(chat.messages[row.index].agent_id || 'hermes')).icon" :size="14" />
               </div>
+              <div v-else-if="isGroup && chat.messages[row.index].role === 'user'" class="msg-avatar user-avatar-group" :style="{ background: getUserDisplay(chat.messages[row.index]).color }">
+                <span class="avatar-initials">{{ getUserDisplay(chat.messages[row.index]).initials }}</span>
+              </div>
               <div class="msg-body">
                 <div v-if="chat.messages[row.index].role === 'agent'" class="msg-name">
                   {{ profileDisplay(profileByAgentId(chat.messages[row.index].agent_id || 'hermes')).label }}
+                </div>
+                <div v-else-if="isGroup && chat.messages[row.index].role === 'user'" class="msg-name user-name">
+                  {{ getUserDisplay(chat.messages[row.index]).name }}
                 </div>
                 <details v-if="chat.messages[row.index].thinking" class="msg-think" :open="chat.messages[row.index].status === 'streaming'">
                   <summary class="think-summary">
@@ -815,9 +846,9 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                     </div>
                     <span v-else class="typing"><span></span><span></span><span></span></span>
                   </template>
-                  <div v-else-if="chat.messages[row.index].role === 'agent'" class="md-body" v-html="mdSearch(chat.messages[row.index].content.text)" />
+                  <div v-else-if="chat.messages[row.index].role === 'agent'" class="md-body" v-html="highlightMentions(mdSearch(chat.messages[row.index].content.text))" />
                   <template v-else>
-                    <div v-if="displayText(chat.messages[row.index].content.text)" class="md-body" v-html="displayHtml(chat.messages[row.index].content.text)"></div>
+                    <div v-if="displayText(chat.messages[row.index].content.text)" class="md-body" v-html="highlightMentions(displayHtml(chat.messages[row.index].content.text))"></div>
                     <div v-if="displayText(chat.messages[row.index].content.text) && extractKnowledgeRefs(chat.messages[row.index].content.text).length" class="knowledge-refs-badge">
                       <Icon name="doc" :size="11" /> 引用了知识库: {{ extractKnowledgeRefs(chat.messages[row.index].content.text).join(', ') }}
                     </div>
