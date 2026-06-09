@@ -115,6 +115,12 @@ const landingProfile = computed(() => chat.profiles.find((p) => p.id === landing
 const featuredProfiles = computed(() => chat.profiles.filter((p) => p.featured && p.is_active).slice(0, 4));
 const activeConvo = computed(() => chat.conversations.find((c) => c.id === chat.activeId));
 const primaryProfile = computed(() => {
+  // Priority: conversation's profile_id > conversation's agent > landing
+  const pid = activeConvo.value?.profile_id;
+  if (pid) {
+    const p = chat.profiles.find((pp) => pp.id === pid);
+    if (p) return p;
+  }
   const aid = activeConvo.value?.primary_agent_id;
   return aid ? chat.profiles.find((p) => p.default_agent_id === aid) || null : landingProfile.value;
 });
@@ -669,6 +675,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           v-model="draft"
           :placeholder="`给 ${landingProfile?.name || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
           :agent="{ label: landingProfile?.name, color: landingProfile?.color, model: landingProfile?.default_model || 'ACP' }"
+          :profile-id="landingProfileId"
           :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
@@ -952,6 +959,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           v-model="draft"
           placeholder="继续对话…"
           :agent="{ label: primaryProfile?.name, color: primaryProfile?.color, model: primaryProfile?.default_model || 'ACP' }"
+          :profile-id="primaryProfile?.id"
           :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :conversation-id="chat.activeId || undefined"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"

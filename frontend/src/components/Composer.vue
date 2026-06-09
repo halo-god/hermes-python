@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /* 1:1 port of the prototype composer (hermes-app.js Composer): rich toolbar +
    profile dropdown (ACP) + circular send button. */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
 import ProfileListItem from "@/components/ProfileListItem.vue";
 import { agentsApi, type Profile } from "@/api/agents";
@@ -16,6 +16,7 @@ const props = defineProps<{
   streaming?: boolean;
   autofocus?: boolean;
   conversationId?: string;
+  profileId?: string;
   knowledgeItems?: { id: string; name: string }[];
   isGroup?: boolean;
   groupAgents?: { agent_id: string; name: string; color: string; icon: string }[];
@@ -81,9 +82,21 @@ onMounted(async () => {
   document.addEventListener("mousedown", onDocClick);
   try {
     profiles.value = await agentsApi.profiles();
-    selected.value = profiles.value[0] || null;
+    // Use profileId prop if provided, otherwise default to first
+    if (props.profileId) {
+      selected.value = profiles.value.find((p) => p.id === props.profileId) || profiles.value[0] || null;
+    } else {
+      selected.value = profiles.value[0] || null;
+    }
   } catch {
     /* ignore */
+  }
+});
+// Sync selected profile when profileId prop changes (e.g., conversation switch)
+watch(() => props.profileId, (newId) => {
+  if (newId && profiles.value.length) {
+    const found = profiles.value.find((p) => p.id === newId);
+    if (found) selected.value = found;
   }
 });
 onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
