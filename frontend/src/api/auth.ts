@@ -24,4 +24,8 @@ export const authApi = {
   async logout(refresh_token: string | null): Promise<void> {
     await http.post("/auth/logout", { refresh_token });
   },
+  async wecomAuthorize(): Promise<{ authorize_url: string }> {
+    const { data } = await http.get<{ authorize_url: string }>("/auth/wecom/authorize");
+    return data;
+  },
 };

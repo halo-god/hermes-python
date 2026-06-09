@@ -5,6 +5,7 @@ import { AxiosError } from "axios";
 import Icon from "@/components/Icon.vue";
 import { useAuthStore } from "@/stores/auth";
 import { authApi } from "@/api/auth";
+import { tokenStore } from "@/api/client";
 import type { ProviderInfo } from "@/types";
 
 const auth = useAuthStore();
@@ -23,40 +24,72 @@ const form = reactive({
   remember: true,
 });
 
-// WeChat-Work QR scan animation (waiting → scanned → confirmed)
-const qrState = ref<"waiting" | "scanned" | "confirmed">("waiting");
-let qrTimer: ReturnType<typeof setTimeout> | undefined;
-const qrCells = Array.from({ length: 49 }, (_, i) => ((i + 1) * 7 + ((i + 1) % 5) * 3) % 3 === 0);
-function startQrCycle() {
-  clearTimeout(qrTimer);
-  qrState.value = "waiting";
-  qrTimer = setTimeout(() => {
-    qrState.value = "scanned";
-    qrTimer = setTimeout(() => {
-      qrState.value = "confirmed";
-      qrTimer = setTimeout(confirmWecom, 800);
-    }, 1500);
-  }, 1800);
-}
-function refreshQr() {
-  startQrCycle();
-}
-async function confirmWecom() {
-  // WeCom is wired to the real provider; if not enabled it returns 4xx
+// WeCom OAuth popup flow
+const wecomLoading = ref(false);
+const wecomError = ref("");
+let wecomPopup: Window | null = null;
+let wecomListener: ((e: MessageEvent) => void) | null = null;
+
+async function startWecomOAuth() {
+  wecomError.value = "";
+  wecomLoading.value = true;
   try {
-    await auth.login({ method: "wecom", username: "wecom", password: "" });
-    router.replace((route.query.redirect as string) || "/");
-  } catch {
-    qrState.value = "waiting";
-    error.value = "企业微信登录需管理员在「后台 · 身份与连接」启用后生效";
+    const { authorize_url } = await authApi.wecomAuthorize();
+    // Open popup centered
+    const w = 480, h = 640;
+    const left = (window.innerWidth - w) / 2 + window.screenX;
+    const top = (window.innerHeight - h) / 2 + window.screenY;
+    wecomPopup = window.open(
+      authorize_url,
+      "wecom_oauth",
+      `width=${w},height=${h},left=${left},top=${top},scrollbars=yes,resizable=yes`,
+    );
+    // Listen for callback message
+    wecomListener = (e: MessageEvent) => {
+      if (e.data?.type === "wecom-callback" && e.data.access_token) {
+        cleanupWecom();
+        // Store tokens and load user session
+        tokenStore.set(e.data.access_token, e.data.refresh_token);
+        auth.bootstrap().then(() => {
+          router.replace((route.query.redirect as string) || "/");
+        });
+      } else if (e.data?.type === "wecom-error") {
+        cleanupWecom();
+        wecomError.value = e.data.error || "企业微信登录失败";
+      }
+    };
+    window.addEventListener("message", wecomListener);
+    // Poll for popup close (user cancelled)
+    const poll = setInterval(() => {
+      if (wecomPopup?.closed) {
+        clearInterval(poll);
+        cleanupWecom();
+        wecomLoading.value = false;
+      }
+    }, 500);
+  } catch (e) {
+    wecomLoading.value = false;
+    const ax = e as AxiosError<{ detail?: string }>;
+    wecomError.value = ax.response?.data?.detail || "企业微信登录未启用";
   }
 }
+
+function cleanupWecom() {
+  wecomLoading.value = false;
+  if (wecomListener) {
+    window.removeEventListener("message", wecomListener);
+    wecomListener = null;
+  }
+  try { wecomPopup?.close(); } catch { /* */ }
+  wecomPopup = null;
+}
+
 watch(activeTab, (t) => {
   error.value = "";
-  if (t === "wecom") startQrCycle();
-  else clearTimeout(qrTimer);
+  wecomError.value = "";
+  if (t !== "wecom") cleanupWecom();
 });
-onBeforeUnmount(() => clearTimeout(qrTimer));
+onBeforeUnmount(() => cleanupWecom());
 
 onMounted(async () => {
   try {
@@ -179,26 +212,30 @@ async function submit() {
           </div>
         </form>
 
-        <!-- WeCom QR scan -->
+        <!-- WeCom OAuth -->
         <div v-else-if="activeTab === 'wecom'" class="login-pane login-pane-qr">
-          <div class="login-qr" :class="qrState">
-            <div class="login-qr-frame">
-              <div class="qr-grid" aria-hidden="true"><i v-for="(f, n) in qrCells" :key="n" :class="{ fill: f }"></i></div>
-              <div class="qr-corner tl"></div><div class="qr-corner tr"></div>
-              <div class="qr-corner bl"></div><div class="qr-corner br"></div>
-              <div class="qr-scanline"></div>
-              <div v-if="qrState !== 'waiting'" class="qr-overlay">
-                <div class="qr-overlay-ico" :class="qrState"><Icon :name="qrState === 'confirmed' ? 'check' : 'user'" :size="22" /></div>
-                <div class="qr-overlay-tx">{{ qrState === "confirmed" ? "已确认，正在进入…" : "已扫描，请在手机上确认" }}</div>
-              </div>
+          <div class="login-wecom-box">
+            <div class="login-wecom-icon">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <rect width="48" height="48" rx="12" fill="#3a7a2a"/>
+                <path d="M16 20c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8c-1.2 0-2.3-.3-3.3-.7L16 29v-3.3C16 24 16 20 16 20z" fill="#fff" opacity="0.9"/>
+                <circle cx="21" cy="19.5" r="1.5" fill="#3a7a2a"/>
+                <circle cx="27" cy="19.5" r="1.5" fill="#3a7a2a"/>
+              </svg>
             </div>
+            <button
+              class="login-submit"
+              :class="{ busy: wecomLoading }"
+              :disabled="wecomLoading"
+              @click="startWecomOAuth"
+            >
+              <span v-if="wecomLoading" class="login-spinner"></span>
+              {{ wecomLoading ? "等待扫码确认…" : "企业微信扫码登录" }}
+            </button>
+            <div class="login-wecom-tip">点击后将弹出企业微信扫码窗口，扫码授权即可登录。</div>
           </div>
-          <div class="login-qr-tip">
-            <div class="login-qr-tip-main">请使用 <b>企业微信</b> 扫码登录</div>
-            <button class="login-link" @click="refreshQr"><Icon name="refresh" :size="12" /> 刷新二维码</button>
-          </div>
-          <div v-if="error" class="login-error" style="justify-content: center">⚠ {{ error }}</div>
-          <div class="login-note"><Icon name="check" :size="12" /> 扫码后按部门 → 团队映射自动开通账号（设计部 → 设计组）。</div>
+          <div v-if="wecomError" class="login-error" style="justify-content: center">⚠ {{ wecomError }}</div>
+          <div class="login-note"><Icon name="check" :size="12" /> 首次扫码登录将按部门→团队映射自动开通账号。</div>
         </div>
 
         <!-- Other reserved providers -->
@@ -485,6 +522,41 @@ async function submit() {
 }
 .login-note b {
   color: var(--accent-deep);
+}
+.login-wecom-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 32px 20px 24px;
+}
+.login-wecom-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(58, 122, 42, 0.08);
+}
+.login-wecom-tip {
+  font-size: 12.5px;
+  color: var(--ink-mute);
+  text-align: center;
+  line-height: 1.5;
+}
+.login-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 @media (max-width: 860px) {
   .login-screen {

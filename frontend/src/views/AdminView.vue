@@ -48,10 +48,12 @@ const activeProvider = ref<string>("ldap");
 const ldap = ref<IdentityProvider | null>(null);
 const wecom = ref<IdentityProvider | null>(null);
 const mappings = ref<DeptMapping[]>([]);
+const wecomMappings = ref<DeptMapping[]>([]);
 const teamsOpt = ref<{ id: string; name: string }[]>([]);
 const roles = ref<AdminRole[]>([]);
 const permissions = ref<PermissionGroup[]>([]);
 const newMap = reactive({ source_value: "", default_role: "member", auto_join_team_id: "" });
+const newWecomMap = reactive({ source_value: "", default_role: "member", auto_join_team_id: "" });
 
 const LDAP_DEFAULTS: Record<string, string | number | boolean> = {
   host: "", port: 389, use_ssl: false, start_tls: false,
@@ -151,6 +153,7 @@ async function loadIdentity() {
   if (wecom.value) {
     for (const [k, v] of Object.entries(WECOM_DEFAULTS))
       if (wecom.value.config[k] === undefined) wecom.value.config[k] = v;
+    wecomMappings.value = await adminApi.mappings("wecom");
   }
   try {
     teamsOpt.value = (await http.get("/teams")).data;
@@ -281,9 +284,20 @@ async function addMapping() {
   newMap.source_value = "";
   newMap.auto_join_team_id = "";
 }
+async function addWecomMapping() {
+  if (!newWecomMap.source_value.trim()) return;
+  const m = await adminApi.addMapping("wecom", { match_basis: "attribute", source_value: newWecomMap.source_value.trim(), default_role: newWecomMap.default_role, auto_join_team_id: newWecomMap.auto_join_team_id || null });
+  wecomMappings.value.push(m);
+  newWecomMap.source_value = "";
+  newWecomMap.auto_join_team_id = "";
+}
 async function deleteMapping(id: string) {
   await adminApi.deleteMapping(id);
   mappings.value = mappings.value.filter((m) => m.id !== id);
+}
+async function deleteWecomMapping(id: string) {
+  await adminApi.deleteMapping(id);
+  wecomMappings.value = wecomMappings.value.filter((m) => m.id !== id);
 }
 
 function providerLetter(k: string) {
@@ -926,11 +940,30 @@ async function handleImportFile(e: Event) {
                 </div>
               </div>
 
-              <!-- 部门映射说明 -->
+              <!-- 部门 → 团队映射 -->
               <div class="cfg-section">
-                <div class="cfg-section-title"><Icon name="folder" /> 部门同步说明</div>
-                <div style="font-size:12.5px;color:var(--ink-mute);line-height:1.7">
-                  企业微信用户登录后，Hermes 会通过企业通讯录 API 拉取用户所在部门，并按下方映射规则赋予角色和加入团队。如需配置部门→团队映射，请先启用此连接器并保存，然后在 LDAP 映射表中（同一套 dept_team_mappings）添加对应规则。
+                <div class="cfg-section-title"><Icon name="user" /> 部门 → 团队映射</div>
+                <div class="map-table">
+                  <div class="map-row head"><div>部门名称</div><div></div><div>默认角色</div><div>自动加入团队</div><div></div><div></div></div>
+                  <div v-for="m in wecomMappings" :key="m.id" class="map-row">
+                    <div style="font-family:var(--monofont, var(--font-mono));font-size:11.5px">{{ m.source_value }}</div>
+                    <div class="map-arrow">→</div>
+                    <div><span class="map-pill role">{{ ROLE_NAME[m.default_role] || m.default_role }}</span></div>
+                    <div><span class="map-pill team" :class="{ none: !m.auto_join_team_id }"><Icon v-if="m.auto_join_team_id" name="user" :size="11" /> {{ teamName(m.auto_join_team_id) }}</span></div>
+                    <div></div>
+                    <div><button class="map-del" @click="deleteWecomMapping(m.id)" title="删除此映射"><Icon name="close" :size="13" /></button></div>
+                  </div>
+                  <div class="map-row">
+                    <div><input class="cfg-input" style="font-size:11.5px" v-model="newWecomMap.source_value" placeholder="例如：研发部" /></div>
+                    <div class="map-arrow">→</div>
+                    <div><select class="cfg-input" v-model="newWecomMap.default_role"><option value="member">成员</option><option value="team_admin">团队管理员</option><option value="viewer">只读</option></select></div>
+                    <div><select class="cfg-input" v-model="newWecomMap.auto_join_team_id"><option value="">不自动加入</option><option v-for="t in teamsOpt" :key="t.id" :value="t.id">{{ t.name }}</option></select></div>
+                    <div></div>
+                    <div><button class="map-del" style="color:var(--accent-deep)" @click="addWecomMapping" title="添加映射"><Icon name="plus" :size="14" /></button></div>
+                  </div>
+                </div>
+                <div style="margin-top:10px;font-size:11px;color:var(--ink-mute);line-height:1.5">
+                  企业微信用户扫码登录后，Hermes 通过通讯录 API 拉取用户所在部门，按上表匹配并赋予角色、加入团队。
                 </div>
               </div>
             </template>

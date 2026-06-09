@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
+from app.db.models.identity import IdentityProvider
 from app.db.models.user import User
 from app.deps import get_current_user
 from app.schemas.auth import (
@@ -16,6 +17,7 @@ from app.schemas.auth import (
     TokenPair,
 )
 from app.core import metrics
+from app.auth_providers.base import ProviderError
 from app.schemas.user import UserOut
 from app.services import audit_service, auth_service
 
@@ -91,3 +93,107 @@ async def providers(db: AsyncSession = Depends(get_db)) -> list[ProviderInfo]:
         ProviderInfo(id=p.id, label=p.label, enabled=p.enabled, kind=p.id) for p in rows
     ]
     return out
+
+
+# ── WeCom OAuth ──────────────────────────────────────────────────────
+
+@router.get("/wecom/authorize")
+async def wecom_authorize(db: AsyncSession = Depends(get_db)):
+    """Return the WeCom OAuth authorize URL for frontend redirect."""
+    from app.services import identity_service
+    from app.auth_providers.wecom import build_authorize_url
+
+    provider = await db.get(IdentityProvider, "wecom")
+    if provider is None or not provider.enabled:
+        raise HTTPException(status_code=403, detail="企业微信登录未启用")
+
+    cfg = provider.config or {}
+    corp_id = (cfg.get("corp_id") or "").strip()
+    agent_id = (cfg.get("agent_id") or "").strip()
+    redirect_uri = (cfg.get("redirect_uri") or "").strip()
+    if not corp_id or not agent_id or not redirect_uri:
+        raise HTTPException(status_code=500, detail="企业微信 OAuth 参数未完整配置")
+
+    url = build_authorize_url(corp_id, agent_id, redirect_uri)
+    return {"authorize_url": url}
+
+
+@router.get("/wecom/callback")
+async def wecom_callback(code: str = "", state: str = "", db: AsyncSession = Depends(get_db)):
+    """WeCom OAuth callback. Exchanges code for user identity, provisions, returns HTML with tokens."""
+    from app.services import identity_service
+    from app.auth_providers.wecom import authenticate as wecom_authenticate
+
+    if not code:
+        raise HTTPException(status_code=400, detail="缺少授权码")
+
+    provider = await db.get(IdentityProvider, "wecom")
+    if provider is None or not provider.enabled:
+        raise HTTPException(status_code=403, detail="企业微信登录未启用")
+
+    try:
+        info = await wecom_authenticate(provider.config, code)
+    except ProviderError as e:
+        # Return HTML with error message
+        return _wecom_callback_html(error=str(e))
+
+    # Provision user (create/update + team mapping)
+    mappings = await identity_service.list_mappings(db, "wecom")
+    user = await identity_service.provision_user(db, info, mappings)
+
+    # Issue JWT tokens
+    tokens = auth_service.issue_tokens(user)
+
+    return _wecom_callback_html(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+    )
+
+
+def _wecom_callback_html(
+    access_token: str = "",
+    refresh_token: str = "",
+    error: str = "",
+) -> Response:
+    """Return an HTML page that posts tokens to the opener window and closes itself."""
+    if error:
+        import html as html_mod
+        safe_error = html_mod.escape(error)
+        content = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>企业微信登录</title></head>
+<body>
+<div id="msg" style="text-align:center;padding:40px;font-family:sans-serif;color:#c00;">
+  登录失败：{safe_error}
+</div>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{ type: 'wecom-error', error: '{safe_error}' }}, '*');
+    setTimeout(function() {{ window.close(); }}, 2000);
+  }}
+</script>
+</body></html>"""
+    else:
+        content = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>企业微信登录</title></head>
+<body>
+<div style="text-align:center;padding:40px;font-family:sans-serif;color:#3a8a7a;">
+  登录成功，正在跳转...
+</div>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{
+      type: 'wecom-callback',
+      access_token: '{access_token}',
+      refresh_token: '{refresh_token}'
+    }}, '*');
+    setTimeout(function() {{ window.close(); }}, 500);
+  }} else {{
+    // Fallback: store in localStorage and redirect
+    localStorage.setItem('access_token', '{access_token}');
+    localStorage.setItem('refresh_token', '{refresh_token}');
+    window.location.href = '/';
+  }}
+</script>
+</body></html>"""
+
+    return Response(content=content, media_type="text/html; charset=utf-8")
