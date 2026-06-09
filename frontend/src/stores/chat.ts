@@ -138,9 +138,9 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  async function newConversation(agentId = "hermes"): Promise<string> {
+  async function newConversation(agentId = "hermes", profileId?: string): Promise<string> {
     closeStream();
-    const detail = await conversationsApi.create({ primary_agent_id: agentId });
+    const detail = await conversationsApi.create({ primary_agent_id: agentId, profile_id: profileId || undefined });
     conversations.value.unshift(detail);
     activeId.value = detail.id;
     activeAgents.value = detail.active_agent_ids || [agentId];
@@ -367,7 +367,7 @@ export const useChatStore = defineStore("chat", () => {
     agentId = "hermes",
     opts?: { profileId?: string; webSearch?: boolean; deepThink?: boolean; stagedFiles?: File[]; mentions?: string[] },
   ) {
-    if (!activeId.value) await newConversation(agentId);
+    if (!activeId.value) await newConversation(agentId, opts?.profileId);
     const id = activeId.value!;
 
     let fileIds: string[] = [];
