@@ -719,16 +719,17 @@ class Runner:
             # blocked, we must poll Redis for pending clarify requests.
             # NOTE: agent uses ACP session_id as key, not conversation_id
             clarify_session_id = new_session or conversation_id
-            # Prepend system_prompt on the first message of a new session
+            # Prepend system_prompt on the first message of a new session,
+            # or when system_prompt is provided (profile switch)
             effective_text = text
-            if new_session and system_prompt:
+            if system_prompt:
                 effective_text = f"{system_prompt}\n\n{text}"
 
             # Use content_blocks if available (ACP structured content), else plain text
             content_blocks = task.get("content_blocks")
             if content_blocks:
                 # Inject system_prompt into the first text block
-                if new_session and system_prompt:
+                if system_prompt:
                     for block in content_blocks:
                         if block.get("type") == "text":
                             block["text"] = f"{system_prompt}\n\n{block['text']}"
