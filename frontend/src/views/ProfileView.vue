@@ -11,7 +11,7 @@ import { memoryApi, type Memory } from "@/api/memory";
 
 const auth = useAuthStore();
 const ns = useNotificationStore();
-const tab = ref<"profile" | "prefs" | "security" | "notify" | "memory">("profile");
+const tab = ref<"profile" | "security" | "notify" | "memory">("profile");
 const COLORS = ["#b8852a", "#3a6da1", "#8a5aa1", "#5b8a4a", "#c45a3a", "#3a8a7a", "#6a3aa1", "#1d1a14"];
 
 // ── profile form ──
@@ -233,7 +233,6 @@ async function saveNotifyPrefs() {
       </div>
       <div class="team-tabs">
         <button class="team-tab" :class="{ active: tab === 'profile' }" @click="tab = 'profile'">个人资料</button>
-        <button class="team-tab" :class="{ active: tab === 'prefs' }" @click="tab = 'prefs'">偏好设置</button>
         <button class="team-tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">代理记忆</button>
         <button class="team-tab" :class="{ active: tab === 'security' }" @click="tab = 'security'">安全</button>
         <button class="team-tab" :class="{ active: tab === 'notify' }" @click="tab = 'notify'">通知</button>
@@ -265,80 +264,53 @@ async function saveNotifyPrefs() {
         </div>
       </template>
 
-      <!-- ── 偏好设置 ── -->
-      <template v-else-if="tab === 'prefs'">
-        <div class="section-card">
-          <div class="section-head">
-            <div class="section-title"><Icon name="bolt" /> 个人偏好记忆</div>
-            <div class="text-mute-sm">AI 会在回答时参考你的偏好，让回复更贴合你的需求</div>
-          </div>
-          <div style="padding: 18px">
-            <div v-for="(pref, idx) in prefsList" :key="idx" class="pref-row">
-              <div class="pref-label">
-                <input
-                  v-if="pref.label === '自定义'"
-                  class="cfg-input pref-key-input"
-                  v-model="pref.key"
-                  placeholder="偏好名称"
-                  @input="onPrefChange"
-                />
-                <span v-else class="pref-key-label">{{ pref.label }}</span>
-              </div>
-              <input
-                class="cfg-input pref-value-input"
-                v-model="pref.value"
-                :placeholder="pref.placeholder"
-                @input="onPrefChange"
-              />
-              <button
-                v-if="!PREF_TEMPLATES.find(t => t.key === pref.key)"
-                class="btn-icon text-mute"
-                style="flex-shrink: 0; padding: 4px"
-                @click="removePref(idx)"
-                title="删除"
-              >✕</button>
-            </div>
-
-            <button class="btn" style="margin-top: 12px; font-size: 12px" @click="addCustomPref">
-              + 添加自定义偏好
-            </button>
-          </div>
-        </div>
-
-        <div class="section-card" style="margin-top: 16px">
-          <div class="section-head">
-            <div class="section-title">界面偏好</div>
-          </div>
-          <div style="padding: 18px; font-size: 13px; color: var(--ink-mute)">
-            主题、密度和语气风格可在右上角 <strong>Tweaks</strong> 面板中实时调整，更改会自动保存到本地。
-          </div>
-        </div>
-
-        <div class="section-card" style="margin-top: 16px">
-          <div class="section-head"><div class="section-title">语言与时区</div></div>
-          <div style="padding: 18px; display: grid; grid-template-columns: 140px 1fr; gap: 14px 18px; align-items: center; font-size: 13px">
-            <div class="text-mute">界面语言</div>
-            <select class="cfg-input" style="height: 34px">
-              <option value="zh">中文（简体）</option>
-              <option value="en">English</option>
-            </select>
-            <div class="text-mute">时区</div>
-            <input class="cfg-input text-mute" value="Asia/Shanghai (UTC+8)" readonly />
-          </div>
-        </div>
-
-        <div v-if="prefsDirty" style="margin-top: 16px; display: flex; align-items: center; gap: 12px">
-          <button class="btn primary" :disabled="prefsSaving" @click="savePrefs">
-            {{ prefsSaving ? '保存中…' : '保存偏好记忆' }}
-          </button>
-          <span class="text-mute-sm">有未保存的更改</span>
-        </div>
-      </template>
-
       <!-- ── 代理记忆 ── -->
       <template v-else-if="tab === 'memory'">
         <div v-if="memoryLoading" style="padding: 32px; text-align: center; color: var(--ink-mute); font-size: 13px">加载中…</div>
         <template v-else>
+          <!-- 个人偏好 (key-value) -->
+          <div class="section-card" style="margin-bottom: 16px">
+            <div class="section-head">
+              <div class="section-title"><Icon name="bolt" /> 个人偏好</div>
+              <div class="text-mute-sm">AI 回答时会参考这些偏好</div>
+            </div>
+            <div style="padding: 18px">
+              <div v-for="(pref, idx) in prefsList" :key="idx" class="pref-row">
+                <div class="pref-label">
+                  <input
+                    v-if="pref.label === '自定义'"
+                    class="cfg-input pref-key-input"
+                    v-model="pref.key"
+                    placeholder="偏好名称"
+                    @input="onPrefChange"
+                  />
+                  <span v-else class="pref-key-label">{{ pref.label }}</span>
+                </div>
+                <input
+                  class="cfg-input pref-value-input"
+                  v-model="pref.value"
+                  :placeholder="pref.placeholder"
+                  @input="onPrefChange"
+                />
+                <button
+                  v-if="!PREF_TEMPLATES.find(t => t.key === pref.key)"
+                  class="btn-icon text-mute"
+                  style="flex-shrink: 0; padding: 4px"
+                  @click="removePref(idx)"
+                  title="删除"
+                >✕</button>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; margin-top: 12px">
+                <button class="btn" style="font-size: 12px" @click="addCustomPref">+ 添加自定义偏好</button>
+                <button v-if="prefsDirty" class="btn primary" style="font-size: 12px" :disabled="prefsSaving" @click="savePrefs">
+                  {{ prefsSaving ? '保存中…' : '保存偏好' }}
+                </button>
+                <span v-if="prefsDirty" class="text-mute-sm">有未保存的更改</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 自由文本记忆 -->
           <div v-for="sec in MEMORY_SECTIONS" :key="sec.key" class="section-card" style="margin-bottom: 16px">
             <div class="section-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
               <div>
