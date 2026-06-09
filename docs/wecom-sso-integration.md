@@ -9,11 +9,11 @@
 ```
 用户点击工作台应用
         ↓
-企业微信将用户导至 https://hermes.infiled.com/api/v1/auth/wecom/silent
+企业微信将用户导至 https://your-domain.com/api/v1/auth/wecom/silent
         ↓
 后端返回 302 跳转到企业微信 OAuth authorize（scope=snsapi_base）
         ↓
-企业微信自动授权，带 code 回调到 https://hermes.infiled.com/api/v1/auth/wecom/callback?code=xxx
+企业微信自动授权，带 code 回调到 https://your-domain.com/api/v1/auth/wecom/callback?code=xxx
         ↓
 后端交换 code → userid → 用户详情 → 创建/更新本地账户 → 签发 JWT
         ↓
@@ -24,15 +24,15 @@
 
 ---
 
-## 二、需要主人提供的信息
+## 二、需要提供的信息
 
 ### 1. 企业微信基础信息
 
 | 参数 | 位置 | 说明 |
 |------|------|------|
-| 企业 ID (corp_id) | 管理后台 → 我的企业 → 企业ID | 例：`ww9fb575d9c9ed5702` |
-| AgentId | 管理后台 → 应用管理 → 自建应用 → 查看 AgentId | 例：`1000134` |
-| Secret | 同上，点击「查看」获取 | 例：`FZ34QcgPtLOHJ6PnNd6B41a_Xf7RIL1Bt0vauE4DBJg` |
+| 企业 ID (corp_id) | 管理后台 → 我的企业 → 企业ID | 例：`ww1234567890abcdef` |
+| AgentId | 管理后台 → 应用管理 → 自建应用 → 查看 AgentId | 例：`1000001` |
+| Secret | 同上，点击「查看」获取 | 例：`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` |
 
 ### 2. 域名与证书
 
@@ -40,7 +40,7 @@
 
 | 需要项 | 说明 |
 |--------|------|
-| 正式域名 | 例：`hermes.infiled.com`，DNS A 记录指向服务器 IP |
+| 正式域名 | 例：`your-domain.com`，DNS A 记录指向服务器 IP |
 | SSL 证书 | 可信 CA 签发（如 DigiCert、Let's Encrypt、公司现有通配符证书）；需有 `.crt`/`.pem` + `.key` |
 | 服务器公网 IP | 用于企业微信「企业可信 IP」配置，可通过 `curl -4 https://httpbin.org/ip` 获取 |
 
@@ -50,7 +50,7 @@
 
 - 文件名：`WW_verify_xxxxxxxx.txt` （企业微信后台下载）
 - 存放路径：`frontend/dist/WW_verify_xxxxxxxx.txt`
-- 访问地址：`https://hermes.infiled.com/WW_verify_xxxxxxxx.txt`
+- 访问地址：`https://your-domain.com/WW_verify_xxxxxxxx.txt`
 
 ---
 
@@ -66,11 +66,11 @@
   "label": "企业微信",
   "enabled": true,
   "config": {
-    "corp_id": "ww9fb575d9c9ed5702",
-    "agent_id": "1000134",
-    "app_secret": "FZ34QcgPtLOHJ6PnNd6B41a_Xf7RIL1Bt0vauE4DBJg",
-    "redirect_uri": "https://hermes.infiled.com/api/v1/auth/wecom/callback",
-    "silent_redirect_uri": "https://hermes.infiled.com/api/v1/auth/wecom/callback"
+    "corp_id": "YOUR_CORP_ID",
+    "agent_id": "YOUR_AGENT_ID",
+    "app_secret": "YOUR_APP_SECRET",
+    "redirect_uri": "https://your-domain.com/api/v1/auth/wecom/callback",
+    "silent_redirect_uri": "https://your-domain.com/api/v1/auth/wecom/callback"
   }
 }
 ```
@@ -82,7 +82,7 @@
 在 `backend/.env` 中添加 HTTPS 域名：
 
 ```env
-CORS_ORIGINS=["http://localhost:5174","http://192.168.5.37:5174","https://hermes.infiled.com"]
+CORS_ORIGINS=["http://localhost:5173","https://your-domain.com"]
 ```
 
 ### 3. 邮箱校验修复（重要）
@@ -99,7 +99,7 @@ class UserBase(BaseModel):
     email: str
 ```
 
->同时，`auth_providers/wecom.py` 中的占位符邮箱建议使用真实域名（如 `@wecom.infiled.com`），避免 `.local` 被邮箱验证库拒绝。
+>同时，`auth_providers/wecom.py` 中的占位符邮箱建议使用真实域名（如 `@wecom.your-domain.com`），避免 `.local` 被邮箱验证库拒绝。
 
 ---
 
@@ -117,7 +117,7 @@ export default defineConfig(({ mode }) => {
     preview: {
       host: true,
       port: 5173,
-      allowedHosts: ["hermes.infiled.com"],
+      allowedHosts: ["your-domain.com"],
     },
   };
 });
@@ -169,7 +169,7 @@ onMounted(async () => {
 2. 应用管理 → 自建应用 → 选择 Hermes 应用
 3. 下滑到「网页授权及JS-SDK」
 4. 点击「设置可信域名」
-5. 填写：`hermes.infiled.com`
+5. 填写你的域名（如 `your-domain.com`）
 6. 上传验证文件 `WW_verify_xxxxxxxx.txt`
 7. 保存
 
@@ -182,7 +182,7 @@ onMounted(async () => {
 将应用主页设为免登入口：
 
 ```
-https://hermes.infiled.com/api/v1/auth/wecom/silent
+https://your-domain.com/api/v1/auth/wecom/silent
 ```
 
 >这是后端 `/wecom/silent` 接口，会返回 302 跳转到企业微信 OAuth authorize（scope=snsapi_base）。
@@ -211,8 +211,8 @@ https://hermes.infiled.com/api/v1/auth/wecom/silent
 	auto_https off
 }
 
-hermes.infiled.com:443 {
-	tls /path/to/hermes.infiled.com.pem /path/to/hermes.infiled.com.key
+your-domain.com:443 {
+	tls /path/to/cert.pem /path/to/key.pem
 
 	# API backend - 使用 handle 保留 /api 前缀
 	handle /api/* {
@@ -230,7 +230,7 @@ hermes.infiled.com:443 {
 
 ## 七、常见问题排查
 
-### 1. 提示“not allow to access from your ip”（errcode=60020）
+### 1. 提示"not allow to access from your ip"（errcode=60020）
 
 **原因**：服务器出口 IP 不在企业微信白名单内。
 
@@ -238,7 +238,7 @@ hermes.infiled.com:443 {
 1. 通过 `curl -4 https://httpbin.org/ip` 获取服务器出口 IP
 2. 在企业微信管理后台 → 应用管理 → 自建应用 → 企业可信IP 中添加该 IP
 
-### 2. 提示“企业微信未返回用户 ID，可能用户未授权”
+### 2. 提示"企业微信未返回用户 ID，可能用户未授权"
 
 **原因**：企业微信 `getuserinfo` 接口返回的字段名是 `UserId`（大写 U），而代码可能只读取了 `userid`。
 
@@ -249,7 +249,7 @@ hermes.infiled.com:443 {
 userid = data.get("UserId") or data.get("userid") or data.get("openid")
 ```
 
-### 3. 提示“登录成功”但还是在登录页
+### 3. 提示"登录成功"但还是在登录页
 
 **原因 A**：后端回调 HTML 用 `localStorage.setItem()` 存 token，但工作台 WebView 的 localStorage 与标准浏览器隔离。
 
@@ -259,7 +259,7 @@ userid = data.get("UserId") or data.get("userid") or data.get("openid")
 - 后端：改用 URL hash 传递 token：`/login#access_token=xxx&refresh_token=xxx`
 - 前端：在 `LoginView.vue` 的 `onMounted` 中解析 hash，提取 token 后 bootstrap
 - 后端：将 `schemas/user.py` 中的 `email: EmailStr` 改为 `email: str`
-- 后端：将占位符邮箱从 `@wecom.local` 改为 `@wecom.infiled.com`
+- 后端：将占位符邮箱从 `@wecom.local` 改为 `@wecom.your-domain.com`
 
 ### 4. 管理后台用户列表空白
 
@@ -268,11 +268,11 @@ userid = data.get("UserId") or data.get("userid") or data.get("openid")
 **解决**：修复 email 校验后，更新已有用户记录：
 
 ```sql
-UPDATE users SET email = REPLACE(email, '@wecom.local', '@wecom.infiled.com')
+UPDATE users SET email = REPLACE(email, '@wecom.local', '@wecom.your-domain.com')
 WHERE email LIKE '%@wecom.local';
 ```
 
-### 5. 提示“Blocked request. This host is not allowed.”
+### 5. 提示"Blocked request. This host is not allowed."
 
 **原因**：Vite preview server 默认不允许自定义域名访问。
 
@@ -291,12 +291,10 @@ WHERE email LIKE '%@wecom.local';
 
 ## 八、后端主要代码变更清单
 
-推送分支：`infiled-dev`
-
 ### 文件 1：`backend/app/auth_providers/wecom.py`
 
 - 兼容 `UserId` 大写字段
-- 邮箱占位符改用 `@wecom.infiled.com`
+- 邮箱占位符改用 `@wecom.your-domain.com`
 
 ### 文件 2：`backend/app/api/v1/auth.py`
 
@@ -313,14 +311,14 @@ WHERE email LIKE '%@wecom.local';
 
 ### 文件 5：`frontend/vite.config.ts`
 
-- 添加 `preview.allowedHosts: ["hermes.infiled.com"]`
+- 添加 `preview.allowedHosts`
 
 ---
 
 ## 九、开发者注意事项
 
-1. **不要直接推 main/master**：所有代码变更必须通过 PR 走 infiled-dev 分支，等待手动 Review 后合并。
+1. **不要直接推 main/master**：所有代码变更必须通过 PR 走开发分支，等待手动 Review 后合并。
 2. **科学上网**：企业微信公网 IP 可能与服务器实际出口 IP 不一致，用 `curl -4 https://httpbin.org/ip` 确认。
-3. **证书管理**：不要在代码库中提交 `.key` 文件。证书应放在服务器指定目录（如 `/home/test/hermes-python/CA/`），并加入 `.gitignore`。
+3. **证书管理**：不要在代码库中提交 `.key` 文件。证书应放在服务器安全目录，并加入 `.gitignore`。
 4. **密钥保护**：WeCom Secret 使用前端缺省机制保护，管理后台保存时如果前端发空字符串，后端保留原值不覆盖。
-5. **日志排查**：临时问题可通过 `journalctl --user -u hermes-python-api.service --since '10 min ago'` 查看最新错误。
+5. **日志排查**：临时问题可通过 `journalctl` 或后端日志查看最新错误。
