@@ -1,16 +1,17 @@
 <script setup lang="ts">
 /* Personal settings — uses the prototype's user-page styles (.up-*). 个人资料
    editing is wired to PATCH /users/me; other tabs reproduce the structure. */
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
 import { http } from "@/api/client";
 import { authApi } from "@/api/auth";
 import { useAuthStore } from "@/stores/auth";
 import { useNotificationStore } from "@/stores/notifications";
+import { memoryApi, type Memory } from "@/api/memory";
 
 const auth = useAuthStore();
 const ns = useNotificationStore();
-const tab = ref<"profile" | "prefs" | "security" | "notify">("profile");
+const tab = ref<"profile" | "prefs" | "security" | "notify" | "memory">("profile");
 const COLORS = ["#b8852a", "#3a6da1", "#8a5aa1", "#5b8a4a", "#c45a3a", "#3a8a7a", "#6a3aa1", "#1d1a14"];
 
 // ── profile form ──
@@ -138,6 +139,55 @@ async function savePrefs() {
 }
 
 watch(() => auth.user, () => { initPrefs() }, { immediate: true })
+
+// ── Agent memory ──
+const MEMORY_SECTIONS = [
+  { key: "notes" as const,        label: "我的笔记",   desc: "写给 AI 的备注、提醒、任务背景",       placeholder: "例如：正在推进的项目、需要 AI 记住的关键信息…" },
+  { key: "user_profile" as const, label: "用户画像",   desc: "AI 对你的理解（职业背景、偏好风格等）", placeholder: "例如：全栈工程师，偏好简洁直接的回答，主要使用 Vue3 + FastAPI…" },
+  { key: "soul" as const,         label: "个性设定",   desc: "AI 的角色定位与沟通风格",               placeholder: "例如：以一位有条理的技术顾问角色与我对话，避免过度赘述…" },
+] as const;
+
+const memoryData = ref<Memory>({ notes: null, user_profile: null, soul: null });
+const memoryEditing = ref<Record<string, boolean>>({ notes: false, user_profile: false, soul: false });
+const memoryDrafts = ref<Record<string, string>>({ notes: "", user_profile: "", soul: "" });
+const memorySaving = ref<Record<string, boolean>>({ notes: false, user_profile: false, soul: false });
+const memoryLoading = ref(false);
+
+async function loadMemory() {
+  memoryLoading.value = true;
+  try {
+    memoryData.value = await memoryApi.get();
+  } catch { /* ignore */ } finally {
+    memoryLoading.value = false;
+  }
+}
+
+function startEditMemory(key: keyof Memory) {
+  memoryDrafts.value[key] = memoryData.value[key] || "";
+  memoryEditing.value[key] = true;
+}
+
+function cancelEditMemory(key: keyof Memory) {
+  memoryEditing.value[key] = false;
+}
+
+async function saveMemory(key: keyof Memory) {
+  memorySaving.value[key] = true;
+  try {
+    const updated = await memoryApi.update({ [key]: memoryDrafts.value[key] || null });
+    memoryData.value = updated;
+    memoryEditing.value[key] = false;
+    ns.toast("已保存");
+  } catch {
+    ns.toast("保存失败", "error");
+  } finally {
+    memorySaving.value[key] = false;
+  }
+}
+
+watch(tab, (t) => { if (t === "memory") loadMemory(); });
+onMounted(() => { if (tab.value === "memory") loadMemory(); });
+
 const notifyPrefs = reactive({
   mention: true,
   team_invite: true,
@@ -184,6 +234,7 @@ async function saveNotifyPrefs() {
       <div class="team-tabs">
         <button class="team-tab" :class="{ active: tab === 'profile' }" @click="tab = 'profile'">个人资料</button>
         <button class="team-tab" :class="{ active: tab === 'prefs' }" @click="tab = 'prefs'">偏好设置</button>
+        <button class="team-tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">代理记忆</button>
         <button class="team-tab" :class="{ active: tab === 'security' }" @click="tab = 'security'">安全</button>
         <button class="team-tab" :class="{ active: tab === 'notify' }" @click="tab = 'notify'">通知</button>
       </div>
@@ -282,6 +333,45 @@ async function saveNotifyPrefs() {
           </button>
           <span class="text-mute-sm">有未保存的更改</span>
         </div>
+      </template>
+
+      <!-- ── 代理记忆 ── -->
+      <template v-else-if="tab === 'memory'">
+        <div v-if="memoryLoading" style="padding: 32px; text-align: center; color: var(--ink-mute); font-size: 13px">加载中…</div>
+        <template v-else>
+          <div v-for="sec in MEMORY_SECTIONS" :key="sec.key" class="section-card" style="margin-bottom: 16px">
+            <div class="section-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+              <div>
+                <div class="section-title">{{ sec.label }}</div>
+                <div class="text-mute-sm" style="margin-top:2px">{{ sec.desc }}</div>
+              </div>
+              <button v-if="!memoryEditing[sec.key]" class="btn" style="font-size:12px;flex-shrink:0" @click="startEditMemory(sec.key)">
+                编辑
+              </button>
+              <div v-else style="display:flex;gap:6px;flex-shrink:0">
+                <button class="btn primary" style="font-size:12px" :disabled="memorySaving[sec.key]" @click="saveMemory(sec.key)">
+                  {{ memorySaving[sec.key] ? '保存中…' : '保存' }}
+                </button>
+                <button class="btn" style="font-size:12px" @click="cancelEditMemory(sec.key)">取消</button>
+              </div>
+            </div>
+            <div style="padding: 0 18px 18px">
+              <template v-if="memoryEditing[sec.key]">
+                <textarea
+                  class="cfg-input"
+                  style="width: 100%; min-height: 120px; padding-top: 8px; resize: vertical"
+                  v-model="memoryDrafts[sec.key]"
+                  :placeholder="sec.placeholder"
+                ></textarea>
+              </template>
+              <div v-else-if="memoryData[sec.key]" class="memory-view-text">{{ memoryData[sec.key] }}</div>
+              <div v-else class="memory-empty" @click="startEditMemory(sec.key)">
+                <span>{{ sec.placeholder }}</span>
+                <span class="memory-empty-hint">点击编辑</span>
+              </div>
+            </div>
+          </div>
+        </template>
       </template>
 
       <!-- ── 安全 ── -->
@@ -465,4 +555,25 @@ async function saveNotifyPrefs() {
 .btn-icon:hover {
   background: var(--rule);
 }
+.memory-view-text {
+  font-size: 13px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  line-height: 1.6;
+  padding: 4px 0;
+}
+.memory-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px dashed var(--rule);
+  border-radius: 8px;
+  cursor: pointer;
+  gap: 8px;
+  transition: border-color 150ms;
+}
+.memory-empty:hover { border-color: var(--accent); }
+.memory-empty > span:first-child { font-size: 12.5px; color: var(--ink-mute); }
+.memory-empty-hint { font-size: 11.5px; color: var(--accent); flex-shrink: 0; }
 </style>

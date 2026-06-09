@@ -4,12 +4,12 @@
    activity), users table, RBAC role cards + permission matrix, identity providers
    with rich detail panel, audit log with filters, system settings + danger zone.
    Wired to the real /admin API. */
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
 import { adminApi } from "@/api/admin";
+import { http } from "@/api/client";
 import { fmtDate } from "@/utils/format";
 import { agentsApi, type Profile, type ProfileCreate } from "@/api/agents";
-import { http } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
 import { usePresence } from "@/composables/usePresence";
 import type {
@@ -27,7 +27,7 @@ const authStore = useAuthStore();
 const isSuperAdmin = computed(() => authStore.user?.role === "super_admin");
 const { queryPresence, getStatus } = usePresence();
 
-const tab = ref<"overview" | "users" | "roles" | "identity" | "audit" | "assistants" | "system">("overview");
+const tab = ref<"overview" | "users" | "roles" | "identity" | "audit" | "assistants" | "system" | "mcp">("overview");
 const stats = ref<AdminStats | null>(null);
 const users = ref<User[]>([]);
 const userQ = ref("");
@@ -86,6 +86,52 @@ const newUser = reactive({ email: "", name: "", password: "", role: "member", de
 const creating = ref(false);
 const createError = ref("");
 const showCreate = ref(false);
+
+// ── MCP Servers ──
+interface McpServer { name: string; transport: string; command: string | null; url: string | null; env: Record<string, string> | null }
+const mcpServers = ref<McpServer[]>([]);
+const mcpLoading = ref(false);
+const mcpForm = reactive({ name: "", transport: "stdio", command: "", url: "", envStr: "" });
+const mcpSaving = ref(false);
+const mcpError = ref("");
+const showMcpForm = ref(false);
+
+async function loadMcpServers() {
+  mcpLoading.value = true;
+  try { mcpServers.value = (await http.get("/admin/mcp-servers")).data; } catch { mcpServers.value = []; } finally { mcpLoading.value = false; }
+}
+async function addMcpServer() {
+  mcpSaving.value = true; mcpError.value = "";
+  try {
+    let env: Record<string, string> | null = null;
+    if (mcpForm.envStr.trim()) {
+      env = {};
+      for (const line of mcpForm.envStr.split("\n")) {
+        const [k, ...v] = line.split("=");
+        if (k.trim()) env[k.trim()] = v.join("=").trim();
+      }
+    }
+    await http.post("/admin/mcp-servers", {
+      name: mcpForm.name,
+      transport: mcpForm.transport,
+      command: mcpForm.transport === "stdio" ? mcpForm.command || null : null,
+      url: mcpForm.transport === "http" ? mcpForm.url || null : null,
+      env,
+    });
+    showMcpForm.value = false;
+    Object.assign(mcpForm, { name: "", transport: "stdio", command: "", url: "", envStr: "" });
+    await loadMcpServers();
+  } catch (e: any) {
+    mcpError.value = e?.response?.data?.detail || "添加失败";
+  } finally {
+    mcpSaving.value = false;
+  }
+}
+async function deleteMcpServer(name: string) {
+  await http.delete(`/admin/mcp-servers/${encodeURIComponent(name)}`);
+  await loadMcpServers();
+}
+watch(tab, (t) => { if (t === "mcp") loadMcpServers(); });
 
 onMounted(load);
 async function load() {
@@ -324,7 +370,7 @@ const providersOn = computed(() => providers.value.filter((p) => p.enabled).leng
 
 const TABS = [
   ["overview", "概览"], ["users", "用户管理"], ["roles", "权限管理"],
-  ["identity", "身份与连接"], ["audit", "审计日志"], ["assistants", "助手管理"], ["system", "系统设置"],
+  ["identity", "身份与连接"], ["audit", "审计日志"], ["assistants", "助手管理"], ["mcp", "MCP 服务器"], ["system", "系统设置"],
 ] as const;
 
 // ── Assistants (Profiles) ──
@@ -1209,6 +1255,69 @@ async function handleImportFile(e: Event) {
             <button class="icon-btn" title="导出" @click="exportProfile(p)"><Icon name="download" :size="13" /></button>
             <button class="icon-btn" title="编辑" @click="openEditProfile(p)"><Icon name="edit" :size="13" /></button>
             <button class="icon-btn" title="删除" style="color:var(--danger)" @click="deleteProfileItem(p)"><Icon name="close" :size="13" /></button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── MCP 服务器 ── -->
+      <template v-else-if="tab === 'mcp'">
+        <div style="margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between">
+          <div class="heading-serif">MCP 服务器</div>
+          <button class="btn primary" style="font-size: 12px" @click="showMcpForm = !showMcpForm">+ 添加服务器</button>
+        </div>
+
+        <!-- Add form -->
+        <div v-if="showMcpForm" class="section-card" style="margin-bottom: 16px">
+          <div class="section-head"><div class="section-title">新增 MCP 服务器</div></div>
+          <div style="padding: 16px; display: grid; grid-template-columns: 130px 1fr; gap: 12px 14px; align-items: center; font-size: 13px">
+            <div class="text-mute">名称 *</div>
+            <input class="cfg-input" v-model="mcpForm.name" placeholder="如 filesystem" />
+            <div class="text-mute">传输方式</div>
+            <select class="cfg-input" style="height: 34px" v-model="mcpForm.transport">
+              <option value="stdio">stdio（本地命令）</option>
+              <option value="http">http（远程 URL）</option>
+            </select>
+            <template v-if="mcpForm.transport === 'stdio'">
+              <div class="text-mute">命令行</div>
+              <input class="cfg-input" v-model="mcpForm.command" placeholder="如 npx -y @modelcontextprotocol/server-filesystem /tmp" />
+            </template>
+            <template v-else>
+              <div class="text-mute">URL</div>
+              <input class="cfg-input" v-model="mcpForm.url" placeholder="如 http://localhost:8888/mcp" />
+            </template>
+            <div class="text-mute">环境变量</div>
+            <textarea class="cfg-input" style="min-height: 64px; padding-top: 8px; resize: vertical"
+              v-model="mcpForm.envStr" placeholder="每行一个，格式：KEY=VALUE"></textarea>
+          </div>
+          <div v-if="mcpError" style="padding: 0 16px 12px; font-size: 12.5px; color: var(--danger)">{{ mcpError }}</div>
+          <div style="padding: 0 16px 16px; display: flex; gap: 8px">
+            <button class="btn primary" :disabled="mcpSaving || !mcpForm.name.trim()" @click="addMcpServer">
+              {{ mcpSaving ? '添加中…' : '确认添加' }}
+            </button>
+            <button class="btn" @click="showMcpForm = false; mcpError = ''">取消</button>
+          </div>
+        </div>
+
+        <!-- Server list -->
+        <div v-if="mcpLoading" style="padding: 24px; text-align: center; color: var(--ink-mute); font-size: 13px">加载中…</div>
+        <div v-else-if="!mcpServers.length" class="section-card">
+          <div style="padding: 24px; text-align: center; color: var(--ink-mute); font-size: 13px">
+            暂无 MCP 服务器配置。点击右上角「添加服务器」开始注册。
+          </div>
+        </div>
+        <div v-else class="section-card">
+          <div class="section-body flush">
+            <div v-for="s in mcpServers" :key="s.name" class="row-item" style="padding: 12px 16px; gap: 12px">
+              <div style="flex: 1; min-width: 0">
+                <div style="font-size: 13.5px; font-weight: 600; color: var(--ink)">{{ s.name }}</div>
+                <div style="font-size: 11.5px; color: var(--ink-mute); margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap">
+                  <span class="role-pill" style="font-size: 10px; padding: 1px 6px">{{ s.transport }}</span>
+                  <span v-if="s.command" style="font-family: monospace">{{ s.command }}</span>
+                  <span v-else-if="s.url">{{ s.url }}</span>
+                </div>
+              </div>
+              <button class="btn text-danger" style="font-size: 12px; flex-shrink: 0" @click="deleteMcpServer(s.name)">删除</button>
+            </div>
           </div>
         </div>
       </template>

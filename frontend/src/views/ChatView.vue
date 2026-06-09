@@ -622,6 +622,18 @@ function rtProgress(replies: RoundtableReply[]): number[] {
   return lengths.map(l => Math.min(100, Math.round((l / max) * 100)));
 }
 
+// ── Composer command handler ──
+function handleComposerCommand(cmd: string) {
+  if (cmd === "new") {
+    router.push("/");
+    draft.value = "";
+  } else if (cmd === "export") {
+    showExport.value = true;
+  } else if (cmd === "clear") {
+    draft.value = "";
+  }
+}
+
 // ── Global keyboard shortcut (⌘F → search) ──
 const showSearch = ref(false);
 const searchQuery = ref("");
@@ -900,6 +912,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                   <summary class="think-summary">
                     <span v-if="chat.messages[row.index].status === 'streaming'" class="think-pulse"></span>
                     💭 思考过程
+                    <span v-if="chat.messages[row.index].status !== 'streaming'" class="think-chars">{{ (chat.messages[row.index].thinking || '').length }} 字</span>
                   </summary>
                   <div class="think-body">{{ chat.messages[row.index].thinking }}</div>
                 </details>
@@ -990,8 +1003,11 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           :is-group="isGroup"
           :group-agents="groupAgents"
           :group-members="groupMembers"
+          :context-tokens="chat.contextTokens"
+          :context-size="chat.contextSize > 0 ? chat.contextSize : undefined"
           @send="onSend"
           @cancel="chat.cancel()"
+          @command="handleComposerCommand"
         />
       </div>
 

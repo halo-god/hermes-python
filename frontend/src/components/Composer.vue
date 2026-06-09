@@ -23,6 +23,8 @@ const props = defineProps<{
   isGroup?: boolean;
   groupAgents?: { agent_id: string; name: string; color: string; icon: string }[];
   groupMembers?: { id: string; user_id: string | null; user_name?: string; agent_id: string | null }[];
+  contextTokens?: number;
+  contextSize?: number;
 }>();
 export interface SendOptions {
   profileId?: string;
@@ -32,7 +34,7 @@ export interface SendOptions {
   mentions?: string[];
 }
 
-const emit = defineEmits<{ "update:modelValue": [string]; send: [SendOptions]; cancel: [] }>();
+const emit = defineEmits<{ "update:modelValue": [string]; send: [SendOptions]; cancel: []; command: [string] }>();
 
 const ta = ref<HTMLTextAreaElement | null>(null);
 const wrap = ref<HTMLElement | null>(null);
@@ -48,6 +50,94 @@ const selected = ref<Profile | null>(null);
 const stagedFiles = ref<File[]>([]);
 const stagedKnowledge = ref<{ id: string; name: string }[]>([]);
 const stagedPreviews = ref<Map<number, string>>(new Map());
+
+// ── Draft auto-save ──
+let _draftTimer: ReturnType<typeof setTimeout> | null = null;
+watch(() => props.conversationId, (newId, oldId) => {
+  if (oldId && props.modelValue.trim()) {
+    localStorage.setItem(`draft:${oldId}`, props.modelValue);
+  } else if (oldId) {
+    localStorage.removeItem(`draft:${oldId}`);
+  }
+  if (newId) {
+    const saved = localStorage.getItem(`draft:${newId}`) || "";
+    emit("update:modelValue", saved);
+    nextTick(() => autoresize());
+  }
+});
+watch(() => props.modelValue, (val) => {
+  if (!props.conversationId) return;
+  if (_draftTimer) clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(() => {
+    if (val.trim()) {
+      localStorage.setItem(`draft:${props.conversationId}`, val);
+    } else {
+      localStorage.removeItem(`draft:${props.conversationId}`);
+    }
+  }, 600);
+});
+
+// ── Slash commands ──
+const SLASH_CMDS = [
+  { cmd: "new",    label: "新建对话",   desc: "开始一个全新的对话" },
+  { cmd: "export", label: "导出对话",   desc: "导出为 Markdown / JSON" },
+  { cmd: "clear",  label: "清空草稿",   desc: "清空当前输入内容" },
+];
+const showSlashMenu = ref(false);
+const slashIdx = ref(0);
+const slashFiltered = computed(() => {
+  if (!props.modelValue.startsWith("/")) return [];
+  const q = props.modelValue.slice(1).toLowerCase();
+  return q === "" ? SLASH_CMDS : SLASH_CMDS.filter(c => c.cmd.includes(q) || c.label.includes(q));
+});
+
+// ── Draggable resize ──
+const composerHeight = ref(parseInt(localStorage.getItem("composer-height") || "84"));
+let _resizing = false;
+let _resizeStartY = 0;
+let _resizeStartH = 0;
+function onResizeStart(e: MouseEvent) {
+  _resizing = true;
+  _resizeStartY = e.clientY;
+  _resizeStartH = composerHeight.value;
+  window.addEventListener("mousemove", onResizeMove);
+  window.addEventListener("mouseup", onResizeEnd);
+  e.preventDefault();
+}
+function onResizeMove(e: MouseEvent) {
+  if (!_resizing) return;
+  const delta = _resizeStartY - e.clientY;
+  composerHeight.value = Math.max(84, Math.min(400, _resizeStartH + delta));
+}
+function onResizeEnd() {
+  _resizing = false;
+  localStorage.setItem("composer-height", String(composerHeight.value));
+  window.removeEventListener("mousemove", onResizeMove);
+  window.removeEventListener("mouseup", onResizeEnd);
+}
+
+// ── Token bar ──
+const tokenPct = computed(() => {
+  if (!props.contextSize || props.contextSize === 0) return 0;
+  return Math.min(1, (props.contextTokens || 0) / props.contextSize);
+});
+const tokenBarColor = computed(() => {
+  if (tokenPct.value > 0.8) return "var(--danger)";
+  if (tokenPct.value > 0.6) return "#e6a817";
+  return "var(--ok)";
+});
+const tokenLabel = computed(() => {
+  const t = props.contextTokens || 0;
+  if (t === 0) return "";
+  if (t >= 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t >= 1_000) return `${(t / 1_000).toFixed(0)}k`;
+  return `${t}`;
+});
+const tokenTooltip = computed(() => {
+  if (!props.contextTokens) return "";
+  const total = props.contextSize ? ` / ${props.contextSize >= 1000 ? (props.contextSize/1000).toFixed(0)+"k" : props.contextSize}` : "";
+  return `上下文：${tokenLabel.value}${total} tokens (${Math.round(tokenPct.value * 100)}%)`;
+});
 
 // @mention state
 const showMentionPicker = ref(false);
@@ -101,7 +191,11 @@ watch(() => props.profileId, (newId) => {
     if (found) selected.value = found;
   }
 });
-onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onDocClick);
+  window.removeEventListener("mousemove", onResizeMove);
+  window.removeEventListener("mouseup", onResizeEnd);
+});
 function onDocClick(e: MouseEvent) {
   if (wrap.value && !wrap.value.contains(e.target as Node)) {
     showProfile.value = false;
@@ -129,6 +223,14 @@ function onInput(e: Event) {
   emit("update:modelValue", val);
   autoresize();
 
+  // Detect slash commands (only at start, single line)
+  if (val.startsWith("/") && !val.includes("\n")) {
+    showSlashMenu.value = true;
+    slashIdx.value = 0;
+  } else {
+    showSlashMenu.value = false;
+  }
+
   // Detect @mention trigger
   if (props.isGroup && props.groupAgents?.length) {
     const cursor = (e.target as HTMLTextAreaElement).selectionStart || val.length;
@@ -144,10 +246,22 @@ function onInput(e: Event) {
   }
 }
 function onKey(e: KeyboardEvent) {
+  // Slash command navigation
+  if (showSlashMenu.value && slashFiltered.value.length) {
+    if (e.key === "ArrowDown") { e.preventDefault(); slashIdx.value = (slashIdx.value + 1) % slashFiltered.value.length; return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); slashIdx.value = (slashIdx.value - 1 + slashFiltered.value.length) % slashFiltered.value.length; return; }
+    if (e.key === "Tab" || (e.key === "Enter" && !e.isComposing)) { e.preventDefault(); selectSlashCmd(slashFiltered.value[slashIdx.value]); return; }
+    if (e.key === "Escape") { showSlashMenu.value = false; return; }
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     if (props.modelValue.trim() && !props.streaming) doSend();
   }
+}
+function selectSlashCmd(item: { cmd: string }) {
+  showSlashMenu.value = false;
+  emit("update:modelValue", "");
+  emit("command", item.cmd);
 }
 function doSend() {
   const files = stagedFiles.value.length ? [...stagedFiles.value] : undefined;
@@ -162,6 +276,10 @@ function doSend() {
   stagedPreviews.value = new Map();
   stagedKnowledge.value = [];
   stagedFileRefs.value = [];
+
+  // Clear saved draft on send
+  if (props.conversationId) localStorage.removeItem(`draft:${props.conversationId}`);
+
   emit("send", { profileId: selected.value?.id, stagedFiles: files, knowledgeIds: kIds, attachedFileIds: fIds, mentions });
 }
 
@@ -303,7 +421,9 @@ function isImageFile(f: File) {
 </script>
 
 <template>
-  <div class="composer-wrap" ref="wrap">
+  <div class="composer-wrap" ref="wrap" :style="{ minHeight: composerHeight + 'px' }">
+    <!-- Drag handle for resizing composer height -->
+    <div class="composer-resize-handle" @mousedown="onResizeStart" title="拖拽调整高度"></div>
     <input ref="fileInput" type="file" accept="image/*,.pdf,.md,.txt,.json,.csv,.html,.js,.ts,.py,.go,.rs,.yaml,.yml,.toml,.sh,.xml,.css,.diff" style="display:none" @change="onFileSelected" />
     <!-- staged file chips -->
     <div v-if="stagedFiles.length || stagedKnowledge.length || stagedFileRefs.length" class="staged-files">
@@ -325,6 +445,21 @@ function isImageFile(f: File) {
       </span>
     </div>
     <div class="composer">
+      <!-- Slash command picker -->
+      <div v-if="showSlashMenu && slashFiltered.length" class="slash-menu">
+        <button
+          v-for="(item, i) in slashFiltered"
+          :key="item.cmd"
+          class="slash-item"
+          :class="{ active: i === slashIdx }"
+          @mousedown.prevent="selectSlashCmd(item)"
+        >
+          <span class="slash-cmd">/{{ item.cmd }}</span>
+          <span class="slash-label">{{ item.label }}</span>
+          <span class="slash-desc">{{ item.desc }}</span>
+        </button>
+      </div>
+
       <!-- @mention picker -->
       <div v-if="showMentionPicker && filteredAgents.length" class="mention-picker">
         <button
@@ -406,6 +541,13 @@ function isImageFile(f: File) {
           </div>
         </div>
         <span class="composer-spacer"></span>
+        <!-- Token context bar -->
+        <div v-if="tokenLabel" class="token-bar-wrap" :title="tokenTooltip">
+          <div class="token-bar-track">
+            <div class="token-bar-fill" :style="{ width: (tokenPct * 100) + '%', background: tokenBarColor }"></div>
+          </div>
+          <span class="token-bar-label" :style="{ color: tokenPct > 0.6 ? tokenBarColor : undefined }">{{ tokenLabel }}</span>
+        </div>
         <div style="position: relative">
           <button class="model-pick" :class="{ locked: profileLocked }" :title="profileLocked ? '助手已锁定，创建新会话可切换' : '切换助手'" @click="!profileLocked && (showProfile = !showProfile)">
             <span class="profile-dot" :style="{ background: pillColor }"></span>
@@ -451,6 +593,109 @@ function isImageFile(f: File) {
 </template>
 
 <style scoped>
+/* ── Resize handle ── */
+.composer-resize-handle {
+  height: 6px;
+  cursor: row-resize;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  transition: background 120ms;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.composer-resize-handle::after {
+  content: "";
+  display: block;
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--rule);
+  transition: background 120ms;
+}
+.composer-resize-handle:hover::after {
+  background: var(--accent);
+}
+
+/* ── Slash command menu ── */
+.slash-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  margin-bottom: 4px;
+  z-index: 10;
+}
+.slash-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 120ms;
+}
+.slash-item:hover,
+.slash-item.active {
+  background: var(--accent-tint);
+}
+.slash-cmd {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 70px;
+}
+.slash-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  flex: 1;
+}
+.slash-desc {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+/* ── Token bar ── */
+.token-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+}
+.token-bar-track {
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rule);
+  overflow: hidden;
+}
+.token-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 400ms, background 400ms;
+}
+.token-bar-label {
+  font-size: 10.5px;
+  color: var(--ink-mute);
+  min-width: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Mention picker (existing) ── */
 .mention-picker {
   position: absolute;
   bottom: 100%;

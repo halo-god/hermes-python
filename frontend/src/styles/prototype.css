@@ -3650,6 +3650,8 @@ body[data-atmos="cinnabar"] {
   .think-summary { font-size: 12px; color: var(--ink-mute); cursor: pointer; list-style: none;
                    display: flex; align-items: center; gap: 6px; }
   .think-summary::-webkit-details-marker { display: none; }
+  .think-chars { margin-left: auto; font-size: 10.5px; color: var(--ink-mute);
+                 background: var(--rule); padding: 1px 6px; border-radius: 8px; font-style: normal; }
   .think-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
                  animation: think-pulse 1s infinite; flex-shrink: 0; }
   @keyframes think-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }

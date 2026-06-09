@@ -304,3 +304,59 @@ async def test_identity(
 ):
     """Test connectivity and credential validity for an identity provider."""
     return await identity_service.test_provider(db, pid)
+
+
+# ── MCP Server management ──
+
+class McpServerIn(_BaseModel):
+    name: str
+    transport: str  # "stdio" | "http"
+    command: str | None = None
+    url: str | None = None
+    env: dict | None = None
+
+
+class McpServerOut(_BaseModel):
+    name: str
+    transport: str
+    command: str | None
+    url: str | None
+    env: dict | None
+
+
+@router.get("/mcp-servers", response_model=list[McpServerOut])
+async def list_mcp_servers(db: AsyncSession = Depends(get_db)):
+    settings = await settings_service.get(db)
+    servers: list[dict] = (settings.data or {}).get("mcp_servers", [])
+    return [McpServerOut(**s) for s in servers]
+
+
+@router.post("/mcp-servers", response_model=McpServerOut, status_code=201)
+async def add_mcp_server(
+    payload: McpServerIn,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    settings = await settings_service.get(db)
+    data = dict(settings.data or {})
+    servers: list[dict] = list(data.get("mcp_servers", []))
+    if any(s["name"] == payload.name for s in servers):
+        raise HTTPException(status_code=409, detail="名称已存在")
+    entry = payload.model_dump()
+    servers.append(entry)
+    data["mcp_servers"] = servers
+    await settings_service.update(db, data)
+    return McpServerOut(**entry)
+
+
+@router.delete("/mcp-servers/{name}", status_code=204)
+async def delete_mcp_server(
+    name: str,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    settings = await settings_service.get(db)
+    data = dict(settings.data or {})
+    servers: list[dict] = [s for s in data.get("mcp_servers", []) if s["name"] != name]
+    data["mcp_servers"] = servers
+    await settings_service.update(db, data)
