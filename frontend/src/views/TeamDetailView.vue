@@ -40,6 +40,10 @@ function agentInfo(id: string) {
   const p = chat.profiles.find((pp) => pp.default_agent_id === id);
   return { id, label: p?.name || id, color: p?.color || "#b8852a", icon: p?.icon || "sparkle", description: p?.desc || "" };
 }
+function profileInfo(id: string) {
+  const p = chat.profiles.find((pp) => pp.id === id);
+  return { id, label: p?.name || id, color: p?.color || "#b8852a", icon: p?.icon || "sparkle", description: p?.desc || "" };
+}
 
 
 const detail = ref<TeamDetail | null>(null);
@@ -195,6 +199,7 @@ const team = computed(() => {
       user_id: m.user_id,
     })),
     sharedAgents: (d?.shared_agents || ["hermes"]) as string[],
+    sharedProfileIds: (d?.shared_profile_ids || []) as string[],
     pinned: (d?.pinned || []) as { id: string; title: string; primary_agent_id: string; updated_at: string }[],
     activity: (d?.activity || []) as { who: string; action: string; target: string; icon: string; ago: string }[],
     knowledge: (d?.knowledge || []) as { id: string; name: string; kind: string; size_bytes: number; uploaded_by_name: string | null }[],
@@ -371,7 +376,7 @@ async function deleteTeam() {
           <div class="team-meta-row">
             <span class="role-pill">{{ roleLabel }}</span>
             <span><Icon name="user" /> {{ team.stats.members }} 位成员</span>
-            <span><Icon name="sparkle" /> {{ team.stats.agents }} 个共享助手</span>
+            <span><Icon name="sparkle" /> {{ team.sharedProfileIds.length || team.stats.agents }} 个共享助手</span>
             <span><Icon name="clock" /> {{ team.created }}</span>
             <span><Icon name="star" /> {{ team.plan }}</span>
           </div>
@@ -413,9 +418,9 @@ async function deleteTeam() {
                 <button class="section-link" @click="openSharedAgentsModal">管理 <Icon name="chevron_right" /></button>
               </div>
               <div class="agent-mini-grid">
-                <button v-for="id in team.sharedAgents" :key="id" class="agent-mini" @click="router.push('/')">
-                  <div class="agent-icon" :style="{ background: agentInfo(id).color || '#b8852a' }"><Icon :name="agentInfo(id).icon || 'sparkle'" /></div>
-                  <div style="min-width: 0; flex: 1"><div class="nm">{{ agentInfo(id).label }}</div><div class="ds">{{ agentInfo(id).description }}</div></div>
+                <button v-for="id in team.sharedProfileIds" :key="id" class="agent-mini" @click="router.push('/')">
+                  <div class="agent-icon" :style="{ background: profileInfo(id).color || '#b8852a' }"><Icon :name="profileInfo(id).icon || 'sparkle'" /></div>
+                  <div style="min-width: 0; flex: 1"><div class="nm">{{ profileInfo(id).label }}</div><div class="ds">{{ profileInfo(id).description }}</div></div>
                 </button>
               </div>
             </div>
