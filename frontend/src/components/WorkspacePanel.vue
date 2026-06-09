@@ -294,6 +294,9 @@ async function saveEdit() {
   try {
     content.value = await props.adapter.patchContent(activeFile.value.id, editContent.value);
     editMode.value = false;
+    // Update version number in file list (backend increments on patch)
+    const f = props.files.find((f) => f.id === activeFile.value!.id);
+    if (f) f.current_version = (f.current_version ?? 0) + 1;
   } finally {
     saving.value = false;
   }
@@ -322,6 +325,9 @@ async function restoreVer(v: WorkspaceFileVersion) {
     content.value = await props.adapter.restoreVersion(activeFile.value.id, v.version_num);
     previewVersion.value = null;
     showVersions.value = false;
+    // Update version number in file list (backend increments on restore)
+    const f = props.files.find((f) => f.id === activeFile.value!.id);
+    if (f) f.current_version = (f.current_version ?? 0) + 1;
   } finally {
     saving.value = false;
   }
