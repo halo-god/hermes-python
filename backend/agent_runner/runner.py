@@ -533,7 +533,7 @@ class Runner:
                 acp_session_id = convo.acp_session_id
                 session_mode = convo.session_mode
 
-        acc = {"text": "", "cancelled": False, "current_msg_id": message_id, "tool_since_split": False}
+        acc = {"text": "", "cancelled": False, "current_msg_id": message_id, "tool_since_split": False, "thinking": "", "plan": None}
         steps: list[dict] = []  # Collect tool_call steps for persistence
 
         async def on_update(update: dict) -> None:
@@ -543,7 +543,7 @@ class Runner:
                 if delta:
                     # Split: new text after tool call → finalize previous, start new message
                     if acc["tool_since_split"] and acc["text"]:
-                        await self._finalize(acc["current_msg_id"], acc["text"], "complete", steps)
+                        await self._finalize(acc["current_msg_id"], acc["text"], "complete", steps, acc.get("thinking") or "", acc.get("plan"))
                         await R.publish_event(conversation_id, {
                             "type": "done", "message_id": acc["current_msg_id"],
                             "status": "complete", "text": acc["text"],
@@ -553,6 +553,8 @@ class Runner:
                         acc["text"] = ""
                         steps.clear()
                         acc["tool_since_split"] = False
+                        acc["thinking"] = ""
+                        acc["plan"] = None
                         await R.publish_event(conversation_id, {"type": "start", "message_id": new_id})
                     acc["text"] += delta
                     await R.publish_event(
@@ -580,6 +582,7 @@ class Runner:
             elif kind == "agent_thought":
                 delta = (update.get("content") or {}).get("text", "") or update.get("delta", "")
                 if delta:
+                    acc["thinking"] += delta
                     await R.publish_event(conversation_id, {
                         "type": "thought",
                         "message_id": acc["current_msg_id"],
@@ -588,6 +591,7 @@ class Runner:
             elif kind == "plan":
                 raw = update.get("entries") or update.get("plan") or []
                 if isinstance(raw, list) and raw:
+                    acc["plan"] = [{"content": e.get("content", ""), "status": e.get("status", "pending"), "priority": e.get("priority", 0)} for e in raw if isinstance(e, dict)]
                     await R.publish_event(conversation_id, {
                         "type": "plan",
                         "message_id": acc["current_msg_id"],
@@ -859,7 +863,7 @@ class Runner:
                     except Exception:
                         logger.warning("Regex fallback confirmation timed out")
 
-        await self._finalize(acc["current_msg_id"], acc["text"], status, steps)
+        await self._finalize(acc["current_msg_id"], acc["text"], status, steps, acc.get("thinking") or "", acc.get("plan"))
         await R.clear_cancel(conversation_id)
         await R.publish_event(
             conversation_id,
@@ -1197,13 +1201,20 @@ class Runner:
             await db.refresh(msg)
             return str(msg.id)
 
-    async def _finalize(self, message_id: str, text: str, status: str, steps: list[dict] | None = None) -> None:
+    async def _finalize(
+        self, message_id: str, text: str, status: str, steps: list[dict] | None = None,
+        thinking: str | None = None, plan: list[dict] | None = None,
+    ) -> None:
         async with async_session_maker() as db:
             msg = await db.get(Message, uuid.UUID(message_id))
             if msg:
                 content: dict = {"text": text}
                 if steps:
                     content["tool_calls"] = steps
+                if thinking:
+                    content["thinking"] = thinking
+                if plan:
+                    content["plan"] = plan
                 msg.content = content
                 msg.status = status
                 # touch the conversation's updated_at

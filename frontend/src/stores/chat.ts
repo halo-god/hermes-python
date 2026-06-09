@@ -6,7 +6,7 @@ import { teamsApi } from "@/api/teams";
 import { tokenStore } from "@/api/client";
 import { useStream } from "@/composables/useStream";
 import { useNotificationStore } from "@/stores/notifications";
-import type { Conversation, Message, Team, WorkspaceFile, ConfirmationRequest } from "@/types";
+import type { Conversation, Message, Team, WorkspaceFile, ConfirmationRequest, PlanEntry } from "@/types";
 import type { Profile } from "@/api/agents";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api/v1";
@@ -86,6 +86,8 @@ export const useChatStore = defineStore("chat", () => {
       messages.value = detail.messages.map((m: Message) => ({
         ...m,
         steps: m.content?.tool_calls as { title: string; status: string }[] | undefined,
+        thinking: (m.content as Record<string, unknown>)?.thinking as string | undefined,
+        plan: (m.content as Record<string, unknown>)?.plan as PlanEntry[] | undefined,
       }));
       hasMoreMessages.value = detail.messages.length >= 50;
       activeAgents.value = detail.active_agent_ids || ["hermes"];
