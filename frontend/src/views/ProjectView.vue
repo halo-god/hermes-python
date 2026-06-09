@@ -34,6 +34,19 @@ const editingProject = ref(false);
 
 const STATUS_NEXT: Record<string, string> = { todo: "doing", doing: "done", done: "todo" };
 const STATUS_LABEL: Record<string, string> = { todo: "待办", doing: "进行中", done: "已完成" };
+const STATUS_COLOR: Record<string, string> = { todo: "#8a8474", doing: "#3a6da1", done: "#3a8a7a" };
+const KANBAN_COLS = ["todo", "doing", "done"] as const;
+
+// ── View mode toggle (list ↔ kanban) ──
+const viewMode = ref<"list" | "kanban">("list");
+const kanbanCols = computed(() =>
+  KANBAN_COLS.map((s) => ({
+    key: s,
+    label: STATUS_LABEL[s],
+    color: STATUS_COLOR[s],
+    items: tasks.value.filter((t) => t.status === s),
+  }))
+);
 const SECTION_LABEL: Record<string, string> = {
   concept: "概念与方向", logo: "标识系统", voice: "声音与语气", rollout: "上线节奏",
   audit: "现状盘点", spec: "规范定义", set: "图标集", deck: "路演 PPT", bp: "一页 BP",
@@ -231,9 +244,21 @@ async function removeProject() {
       <div class="section-card" style="margin-bottom: 18px">
         <div class="section-head">
           <div class="section-title"><Icon name="check" /> 任务 · {{ taskStats.done }}/{{ taskStats.total }}</div>
-          <span style="font-size: 11.5px; color: var(--ink-mute)">点击状态切换 · 交给助手可直接开始处理</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="view-toggle">
+              <button :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'" title="列表视图">
+                <Icon name="list" :size="13" />
+              </button>
+              <button :class="{ active: viewMode === 'kanban' }" @click="viewMode = 'kanban'" title="看板视图">
+                <Icon name="cube" :size="13" />
+              </button>
+            </div>
+            <span style="font-size: 11.5px; color: var(--ink-mute)">点击状态切换 · 交给助手处理</span>
+          </div>
         </div>
-        <div class="section-body flush">
+
+        <!-- List view -->
+        <div v-if="viewMode === 'list'" class="section-body flush">
           <div v-for="t in tasks" :key="t.id" class="task-row" :class="t.status">
             <button class="task-status" :class="t.status" @click="cycleStatus(t)" :title="STATUS_LABEL[t.status]">
               <Icon v-if="t.status === 'done'" name="check" :size="12" />
@@ -259,6 +284,42 @@ async function removeProject() {
             <Icon name="plus" :size="14" class="text-mute" />
             <input class="task-add-input" v-model="newTaskTitle" placeholder="添加一个任务，回车创建…" @keydown.enter="addTask" />
             <button v-if="newTaskTitle.trim()" class="btn primary" style="height: 28px; padding: 0 12px" @click="addTask">添加</button>
+          </div>
+        </div>
+
+        <!-- Kanban view -->
+        <div v-else class="kanban-board">
+          <div v-for="col in kanbanCols" :key="col.key" class="kanban-col">
+            <div class="kanban-col-head">
+              <span class="kanban-col-dot" :style="{ background: col.color }"></span>
+              <span class="kanban-col-label">{{ col.label }}</span>
+              <span class="kanban-col-count">{{ col.items.length }}</span>
+            </div>
+            <div class="kanban-cards">
+              <div v-for="t in col.items" :key="t.id" class="kanban-card">
+                <div class="kanban-card-title" :class="{ done: t.status === 'done' }">{{ t.title }}</div>
+                <div class="kanban-card-meta">
+                  <span v-if="memberById(t.owner_id)" class="task-owner" style="font-size:10.5px">
+                    <span class="mem-avatar tiny" :style="{ background: memberById(t.owner_id)!.color || '#b8852a' }">{{ memberById(t.owner_id)!.initials }}</span>
+                    {{ memberById(t.owner_id)!.name }}
+                  </span>
+                  <span v-if="t.agent_id" class="task-agent" style="font-size:10.5px">
+                    <span class="agent-dot" :style="{ background: agentById(t.agent_id).color || '#b8852a' }"></span>
+                    {{ agentById(t.agent_id).label }}
+                  </span>
+                </div>
+                <div class="kanban-card-actions">
+                  <button class="kanban-move-btn" :disabled="t.status === 'todo'" @click="cycleStatus(t)" title="向前移动状态">←</button>
+                  <button class="row-act accent" title="交给助手" @click="taskToAI(t)"><Icon name="sparkle" :size="11" /></button>
+                  <button class="row-act danger" title="删除" @click="deleteTask(t)"><Icon name="close" :size="11" /></button>
+                  <button class="kanban-move-btn" :disabled="t.status === 'done'" @click="cycleStatus(t)" title="向后移动状态">→</button>
+                </div>
+              </div>
+              <div v-if="!col.items.length" class="kanban-empty">暂无任务</div>
+            </div>
+            <div v-if="col.key === 'todo'" class="kanban-add">
+              <input class="task-add-input" v-model="newTaskTitle" placeholder="+ 新任务" @keydown.enter="addTask" />
+            </div>
           </div>
         </div>
       </div>

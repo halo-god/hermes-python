@@ -12,6 +12,7 @@ import { useChatStore } from "@/stores/chat";
 import { useNotificationStore } from "@/stores/notifications";
 import { useTheme } from "@/composables/useTheme";
 import { conversationsApi } from "@/api/conversations";
+import type { Conversation } from "@/types";
 
 const auth = useAuthStore();
 const chat = useChatStore();
@@ -25,6 +26,50 @@ const showNewGroup = ref(false);
 
 const groupConversations = computed(() => chat.conversations.filter((c) => c.type === "group"));
 const personalConversations = computed(() => chat.conversations.filter((c) => c.type !== "group"));
+
+// ── Date grouping (borrowed from hermes-web-ui accordion pattern) ──
+function dateGroup(dateStr: string): "today" | "yesterday" | "week" | "earlier" {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const d = new Date(dateStr);
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff = today - day;
+  if (diff <= 0) return "today";
+  if (diff <= 86400000) return "yesterday";
+  if (diff <= 6 * 86400000) return "week";
+  return "earlier";
+}
+
+const DATE_LABELS: Record<string, string> = {
+  pinned: "置顶",
+  today: "今天",
+  yesterday: "昨天",
+  week: "最近 7 天",
+  earlier: "更早",
+};
+
+interface ConvoGroup { key: string; label: string; items: Conversation[] }
+
+const groupedConversations = computed((): ConvoGroup[] => {
+  const pinned = personalConversations.value.filter((c) => c.pinned);
+  const unpinned = personalConversations.value.filter((c) => !c.pinned);
+
+  const buckets: Record<string, Conversation[]> = { today: [], yesterday: [], week: [], earlier: [] };
+  for (const c of unpinned) buckets[dateGroup(c.updated_at || c.created_at)].push(c);
+
+  const groups: ConvoGroup[] = [];
+  if (pinned.length) groups.push({ key: "pinned", label: DATE_LABELS.pinned, items: pinned });
+  (["today", "yesterday", "week", "earlier"] as const).forEach((k) => {
+    if (buckets[k].length) groups.push({ key: k, label: DATE_LABELS[k], items: buckets[k] });
+  });
+  return groups;
+});
+
+// Profile color dot — looks up the profile associated with a conversation
+function profileColor(c: Conversation): string | null {
+  if (!c.profile_id) return null;
+  return chat.profiles.find((p) => p.id === c.profile_id)?.color ?? null;
+}
 
 const isAdmin = computed(() => auth.user?.role === "super_admin" || auth.user?.role === "admin");
 const onChat = computed(() => route.name === "home");
@@ -205,33 +250,48 @@ async function shareConvo(id: string) {
 
       <div class="side-label">{{ t('nav.conversations') }}</div>
       <div class="convo-list">
-        <div
-          v-for="c in personalConversations"
-          :key="c.id"
-          class="convo"
-          :class="{ active: onChat && c.id === chat.activeId }"
-          @click="openConvo(c.id)"
-          @contextmenu="onCtxMenu($event, c.id)"
-        >
-          <div class="convo-ico">
-            <span v-if="c.id === chat.streamingConvoId" class="convo-live-ring"></span>
-            <Icon v-else :name="c.icon || 'chat'" />
+        <template v-for="group in groupedConversations" :key="group.key">
+          <div class="convo-date-sep">
+            <Icon v-if="group.key === 'pinned'" name="pin" :size="9" style="color:var(--accent-deep)" />
+            {{ group.label }}
           </div>
-          <template v-if="renamingId === c.id">
-            <input
-              v-model="renameVal"
-              class="convo-rename-input"
-              @keydown.enter="confirmRename"
-              @keydown.escape="renamingId = null"
-              @blur="confirmRename"
-              autofocus
-            />
-          </template>
-          <template v-else>
-            <div class="convo-title">{{ c.title }}</div>
-          </template>
-          <span v-if="c.id === chat.streamingConvoId" class="convo-live-label">生成中</span>
-          <Icon v-else-if="c.pinned" name="pin" style="width: 11px; height: 11px; color: var(--accent-deep); flex-shrink: 0" />
+          <div
+            v-for="c in group.items"
+            :key="c.id"
+            class="convo"
+            :class="{ active: onChat && c.id === chat.activeId }"
+            @click="openConvo(c.id)"
+            @contextmenu="onCtxMenu($event, c.id)"
+          >
+            <div class="convo-ico" style="position:relative">
+              <span v-if="c.id === chat.streamingConvoId" class="convo-live-ring"></span>
+              <Icon v-else :name="c.icon || 'chat'" />
+              <span
+                v-if="profileColor(c)"
+                class="convo-profile-dot"
+                :style="{ background: profileColor(c) as string }"
+              ></span>
+            </div>
+            <template v-if="renamingId === c.id">
+              <input
+                v-model="renameVal"
+                class="convo-rename-input"
+                @keydown.enter="confirmRename"
+                @keydown.escape="renamingId = null"
+                @blur="confirmRename"
+                autofocus
+              />
+            </template>
+            <template v-else>
+              <div class="convo-title">{{ c.title }}</div>
+            </template>
+            <span v-if="c.id === chat.streamingConvoId" class="convo-live-label">生成中</span>
+          </div>
+        </template>
+        <div v-if="!personalConversations.length" class="convo-empty">
+          <Icon name="chat" :size="22" style="color:var(--ink-faint);margin-bottom:6px" />
+          <div>还没有会话</div>
+          <div style="font-size:10.5px;margin-top:2px">点击「新建会话」开始</div>
         </div>
       </div>
 
@@ -365,5 +425,38 @@ async function shareConvo(id: string) {
 }
 .group-ico {
   color: var(--accent) !important;
+}
+.convo-date-sep {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 14px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  user-select: none;
+}
+.convo-date-sep:first-child {
+  padding-top: 2px;
+}
+.convo-profile-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-side);
+}
+.convo-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 16px;
+  font-size: 12px;
+  color: var(--ink-mute);
+  text-align: center;
 }
 </style>
