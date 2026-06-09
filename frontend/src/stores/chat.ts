@@ -89,6 +89,13 @@ export const useChatStore = defineStore("chat", () => {
       }));
       hasMoreMessages.value = detail.messages.length >= 50;
       activeAgents.value = detail.active_agent_ids || ["hermes"];
+      // Ensure the conversation is in the sidebar list (covers newly created convos)
+      const idx = conversations.value.findIndex((c) => c.id === id);
+      if (idx !== -1) {
+        Object.assign(conversations.value[idx], detail);
+      } else {
+        conversations.value.unshift(detail);
+      }
       syncActiveProfiles();
       files.value = await conversationsApi.files(id);
 
