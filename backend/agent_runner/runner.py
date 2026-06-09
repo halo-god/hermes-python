@@ -723,7 +723,7 @@ class Runner:
             # or when system_prompt is provided (profile switch)
             effective_text = text
             if system_prompt:
-                effective_text = f"{system_prompt}\n\n{text}"
+                effective_text = f"【角色设定】\n{system_prompt}\n【角色设定结束】\n\n{text}"
 
             # Use content_blocks if available (ACP structured content), else plain text
             content_blocks = task.get("content_blocks")
@@ -732,7 +732,7 @@ class Runner:
                 if system_prompt:
                     for block in content_blocks:
                         if block.get("type") == "text":
-                            block["text"] = f"{system_prompt}\n\n{block['text']}"
+                            block["text"] = f"【角色设定】\n{system_prompt}\n【角色设定结束】\n\n{block['text']}"
                             break
                 prompt_content = content_blocks
             else:
