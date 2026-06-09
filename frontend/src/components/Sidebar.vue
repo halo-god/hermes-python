@@ -36,12 +36,8 @@ const renameVal = ref("");
 const deleteTarget = ref<{ id: string; title: string } | null>(null);
 
 async function newChat() {
-  // Skip modal, use first active profile directly
-  const p = chat.profiles.find((pp) => pp.is_active);
-  if (p) {
-    await chat.newConversationWithProfile(p.id);
-    if (!onChat.value) router.push("/");
-  }
+  chat.landing();
+  if (!onChat.value) router.push("/");
 }
 async function openConvo(id: string) {
   await chat.openConversation(id);
@@ -129,7 +125,7 @@ async function shareConvo(id: string) {
 
       <div class="side-section" style="margin-top: 4px">
         <div class="side-row" :class="{ active: onChat && !chat.activeId }" @click="newChat">
-          <Icon name="plus" class="ico" /> {{ t('nav.newChat') }}
+          <Icon name="home" class="ico" /> {{ t('nav.home') || '首页' }}
           <span class="kbd">⌘N</span>
         </div>
         <div class="side-row" :class="{ active: route.name === 'history' }" @click="router.push('/history')" style="margin-top: -2px">

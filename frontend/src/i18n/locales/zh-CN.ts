@@ -25,6 +25,7 @@ export default {
   },
   nav: {
     newChat: "新会话",
+    home: "首页",
     allChats: "所有会话",
     search: "搜索",
     schedule: "定时任务",

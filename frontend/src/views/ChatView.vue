@@ -681,6 +681,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           :placeholder="`给 ${landingProfile?.name || 'Hermes'} 发消息…  ⌘K 搜索 · Enter 发送`"
           :agent="{ label: landingProfile?.name, color: landingProfile?.color, model: landingProfile?.default_model || 'ACP' }"
           :profile-id="landingProfileId"
+          :profile-locked="true"
           :streaming="chat.isActivelyStreaming(chat.activeId || '')"
           :knowledge-items="teamKnowledge.length ? teamKnowledge : undefined"
           @send="onSend"
