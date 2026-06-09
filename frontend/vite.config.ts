@@ -55,5 +55,10 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    preview: {
+      host: true,
+      port: 5173,
+      allowedHosts: ["hermes.infiled.com"],
+    },
   };
 });

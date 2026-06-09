@@ -82,9 +82,10 @@ async def authenticate(config: dict, code: str) -> IdentityInfo:
         if errcode != 0:
             # errcode 42003 = code expired; 40029 = invalid code
             raise ProviderError(f"获取用户信息失败: {data.get('errmsg', f'errcode={errcode}')}")
-        userid = data.get("userid")
+        # WeCom returns "UserId" (capital U) in getuserinfo; "openid" for external contacts.
+        userid = data.get("UserId") or data.get("userid") or data.get("openid")
         if not userid:
-            raise ProviderError("企业微信未返回用户 ID，可能用户未授权")
+            raise ProviderError(f"企业微信未返回用户 ID，可能用户未授权。原始响应: {data}")
 
         # Step 3: Get user detail
         r = await client.get(_WECOM_USER_DETAIL_URL, params={
@@ -98,7 +99,7 @@ async def authenticate(config: dict, code: str) -> IdentityInfo:
         email = data.get("email", "")
         if not email:
             # WeCom may return empty email; generate placeholder
-            email = f"{userid}@wecom.local"
+            email = f"{userid}@wecom.infiled.com"
         mobile = data.get("mobile", "")
         department_ids = data.get("department", [])  # list of int dept IDs
 

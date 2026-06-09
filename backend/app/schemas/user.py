@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserBase(BaseModel):
-    email: EmailStr
+    email: str
     name: str
     handle: str | None = None
     title: str | None = None

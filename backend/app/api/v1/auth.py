@@ -200,10 +200,7 @@ def _wecom_callback_html(
   登录失败：{safe_error}
 </div>
 <script>
-  if (window.opener) {{
-    window.opener.postMessage({{ type: 'wecom-error', error: '{safe_error}' }}, '*');
-    setTimeout(function() {{ window.close(); }}, 2000);
-  }}
+  window.location.href = '/login#error=' + encodeURIComponent('{safe_error}');
 </script>
 </body></html>"""
     else:
@@ -222,10 +219,8 @@ def _wecom_callback_html(
     }}, '*');
     setTimeout(function() {{ window.close(); }}, 500);
   }} else {{
-    // Fallback: store in localStorage and redirect
-    localStorage.setItem('access_token', '{access_token}');
-    localStorage.setItem('refresh_token', '{refresh_token}');
-    window.location.href = '/';
+    // Workbench / no-opener fallback: pass tokens via URL hash
+    window.location.href = '/login#access_token={access_token}&refresh_token={refresh_token}';
   }}
 </script>
 </body></html>"""

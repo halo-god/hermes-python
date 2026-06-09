@@ -97,6 +97,30 @@ onMounted(async () => {
   } catch {
     providers.value = [{ id: "local", label: "账号密码", enabled: true, kind: "local" }];
   }
+
+  // Handle WeCom workbench callback (tokens passed in URL hash)
+  const hash = window.location.hash;
+  if (hash && hash.includes("access_token=")) {
+    const params = new URLSearchParams(hash.replace("#", ""));
+    const accessToken = params.get("access_token");
+    const refreshToken = params.get("refresh_token");
+    const hashError = params.get("error");
+    if (hashError) {
+      wecomError.value = decodeURIComponent(hashError);
+    } else if (accessToken && refreshToken) {
+      tokenStore.set(accessToken, refreshToken);
+      // Clean hash from URL
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      try {
+        await auth.bootstrap();
+        if (auth.isAuthenticated) {
+          router.replace((route.query.redirect as string) || "/");
+        }
+      } catch {
+        wecomError.value = "登录状态恢复失败，请重试";
+      }
+    }
+  }
 });
 
 async function submit() {
