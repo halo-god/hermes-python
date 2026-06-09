@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -41,6 +42,9 @@ class User(UUIDPrimaryKey, Timestamps, Base):
 
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Personal preferences memory — injected into agent context
+    preferences: Mapped[dict | None] = mapped_column(JSONB, default=None)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<User {self.email} role={self.role}>"

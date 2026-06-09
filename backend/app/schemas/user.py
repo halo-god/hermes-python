@@ -33,6 +33,7 @@ class UserUpdate(BaseModel):
     timezone: str | None = None
     bio: str | None = None
     color: str | None = None
+    preferences: dict | None = None
 
 
 class UserOut(UserBase):
@@ -43,5 +44,6 @@ class UserOut(UserBase):
     source: str
     role: str
     status: str
+    preferences: dict | None = None
     created_at: datetime
     last_active_at: datetime | None = None

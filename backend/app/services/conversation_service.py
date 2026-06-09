@@ -11,6 +11,7 @@ from app.config import settings
 from app.core import redis as redis_core
 from app.db.models.agent import Profile
 from app.db.models.conversation import Conversation, Message
+from app.db.models.user import User
 from app.db.models.workspace import WorkspaceFile, WorkspaceFileVersion
 
 
@@ -449,6 +450,23 @@ async def send_roundtable(
     return user_msg, rt_msg
 
 
+async def _build_preferences_prompt(db: AsyncSession, owner_id: uuid.UUID | None) -> str | None:
+    """Load user preferences and format as system prompt snippet."""
+    if not owner_id:
+        return None
+    user = await db.get(User, owner_id)
+    if not user or not user.preferences:
+        return None
+    prefs = user.preferences
+    lines = []
+    for key, value in prefs.items():
+        if value:
+            lines.append(f"- {key}: {value}")
+    if not lines:
+        return None
+    return "用户个人偏好记忆（请在回答时参考这些偏好）:\n" + "\n".join(lines)
+
+
 async def dispatch(
     db: AsyncSession,
     convo: Conversation,
@@ -468,6 +486,11 @@ async def dispatch(
         profile = await db.get(Profile, convo.profile_id)
         if profile:
             system_prompt = profile.system_prompt or None
+
+    # Inject user preferences into system_prompt
+    prefs_prompt = await _build_preferences_prompt(db, owner_id)
+    if prefs_prompt:
+        system_prompt = f"{system_prompt}\n\n{prefs_prompt}" if system_prompt else prefs_prompt
 
     if len(agents) > 1:
         return await send_roundtable(
@@ -955,6 +978,11 @@ async def dispatch_group(
             if profile:
                 system_prompt = profile.system_prompt or None
 
+        # Inject user preferences
+        prefs_prompt = await _build_preferences_prompt(db, owner_id)
+        if prefs_prompt:
+            system_prompt = f"{system_prompt}\n\n{prefs_prompt}" if system_prompt else prefs_prompt
+
         _, agent_msg = await send_message(
             db, convo, text,
             attached_file_ids=attached_file_ids,
@@ -969,6 +997,11 @@ async def dispatch_group(
         profile = await db.get(Profile, convo.profile_id)
         if profile:
             system_prompt = profile.system_prompt or None
+
+    # Inject user preferences
+    prefs_prompt = await _build_preferences_prompt(db, owner_id)
+    if prefs_prompt:
+        system_prompt = f"{system_prompt}\n\n{prefs_prompt}" if system_prompt else prefs_prompt
 
     return await send_roundtable(
         db, convo, text, resolved,

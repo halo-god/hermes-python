@@ -72,7 +72,72 @@ function relTime(ts: string) {
   return `${Math.floor(diff / 86400)} 天前`;
 }
 
-// ── notifications preferences ──
+// ── personal preferences memory ──
+interface PrefItem { key: string; value: string; label: string; placeholder: string }
+const PREF_TEMPLATES: Omit<PrefItem, 'value'>[] = [
+  { key: '称呼', label: '称呼偏好', placeholder: '例如：叫我庭辉、用"你"称呼我' },
+  { key: '语言风格', label: '语言风格', placeholder: '例如：简洁直接、技术范、轻松口语化' },
+  { key: '回复格式', label: '回复格式偏好', placeholder: '例如：用表格对比、用要点列表、先结论后解释' },
+  { key: '技术栈', label: '常用技术栈', placeholder: '例如：Vue3+FastAPI、Python、SQLAlchemy' },
+  { key: '专业领域', label: '专业领域', placeholder: '例如：ERP运维、A股投资、全栈开发' },
+  { key: '兴趣爱好', label: '兴趣爱好', placeholder: '例如：AI学习、投资理财、效率工具' },
+  { key: '时区作息', label: '时区与作息', placeholder: '例如：UTC+8，工作日9-18点在线' },
+  { key: '工作习惯', label: '工作习惯', placeholder: '例如：喜欢先看代码再问问题、偏好详细步骤' },
+]
+const prefsList = ref<PrefItem[]>([])
+const prefsSaving = ref(false)
+const prefsDirty = ref(false)
+
+function initPrefs() {
+  const saved = auth.user?.preferences || {}
+  prefsList.value = PREF_TEMPLATES.map(t => ({
+    ...t,
+    value: (saved as Record<string, string>)[t.key] || '',
+  }))
+  // Load any custom keys not in templates
+  for (const [k, v] of Object.entries(saved as Record<string, string>)) {
+    if (!PREF_TEMPLATES.find(t => t.key === k)) {
+      prefsList.value.push({ key: k, value: v, label: k, placeholder: '自定义偏好' })
+    }
+  }
+  prefsDirty.value = false
+}
+
+function addCustomPref() {
+  prefsList.value.push({ key: '', value: '', label: '自定义', placeholder: '输入偏好名称' })
+  prefsDirty.value = true
+}
+
+function removePref(index: number) {
+  prefsList.value.splice(index, 1)
+  prefsDirty.value = true
+}
+
+function onPrefChange() {
+  prefsDirty.value = true
+}
+
+async function savePrefs() {
+  prefsSaving.value = true
+  try {
+    const prefs: Record<string, string> = {}
+    for (const p of prefsList.value) {
+      const k = p.key.trim()
+      const v = p.value.trim()
+      if (k && v) prefs[k] = v
+    }
+    await http.patch('/users/me', { preferences: prefs })
+    auth.user = await authApi.me()
+    prefsDirty.value = false
+    ns.toast('偏好记忆已保存，AI 会在回答时参考你的偏好')
+  } catch {
+    ns.toast('保存失败', 'error')
+  } finally {
+    prefsSaving.value = false
+  }
+}
+
+watch(() => auth.user, () => { initPrefs() }, { immediate: true })
 const notifyPrefs = reactive({
   mention: true,
   team_invite: true,
@@ -152,11 +217,52 @@ async function saveNotifyPrefs() {
       <!-- ── 偏好设置 ── -->
       <template v-else-if="tab === 'prefs'">
         <div class="section-card">
-          <div class="section-head"><div class="section-title">界面偏好</div></div>
+          <div class="section-head">
+            <div class="section-title"><Icon name="bolt" /> 个人偏好记忆</div>
+            <div class="text-mute-sm">AI 会在回答时参考你的偏好，让回复更贴合你的需求</div>
+          </div>
+          <div style="padding: 18px">
+            <div v-for="(pref, idx) in prefsList" :key="idx" class="pref-row">
+              <div class="pref-label">
+                <input
+                  v-if="pref.label === '自定义'"
+                  class="cfg-input pref-key-input"
+                  v-model="pref.key"
+                  placeholder="偏好名称"
+                  @input="onPrefChange"
+                />
+                <span v-else class="pref-key-label">{{ pref.label }}</span>
+              </div>
+              <input
+                class="cfg-input pref-value-input"
+                v-model="pref.value"
+                :placeholder="pref.placeholder"
+                @input="onPrefChange"
+              />
+              <button
+                v-if="!PREF_TEMPLATES.find(t => t.key === pref.key)"
+                class="btn-icon text-mute"
+                style="flex-shrink: 0; padding: 4px"
+                @click="removePref(idx)"
+                title="删除"
+              >✕</button>
+            </div>
+
+            <button class="btn" style="margin-top: 12px; font-size: 12px" @click="addCustomPref">
+              + 添加自定义偏好
+            </button>
+          </div>
+        </div>
+
+        <div class="section-card" style="margin-top: 16px">
+          <div class="section-head">
+            <div class="section-title">界面偏好</div>
+          </div>
           <div style="padding: 18px; font-size: 13px; color: var(--ink-mute)">
             主题、密度和语气风格可在右上角 <strong>Tweaks</strong> 面板中实时调整，更改会自动保存到本地。
           </div>
         </div>
+
         <div class="section-card" style="margin-top: 16px">
           <div class="section-head"><div class="section-title">语言与时区</div></div>
           <div style="padding: 18px; display: grid; grid-template-columns: 140px 1fr; gap: 14px 18px; align-items: center; font-size: 13px">
@@ -168,6 +274,13 @@ async function saveNotifyPrefs() {
             <div class="text-mute">时区</div>
             <input class="cfg-input text-mute" value="Asia/Shanghai (UTC+8)" readonly />
           </div>
+        </div>
+
+        <div v-if="prefsDirty" style="margin-top: 16px; display: flex; align-items: center; gap: 12px">
+          <button class="btn primary" :disabled="prefsSaving" @click="savePrefs">
+            {{ prefsSaving ? '保存中…' : '保存偏好记忆' }}
+          </button>
+          <span class="text-mute-sm">有未保存的更改</span>
         </div>
       </template>
 
@@ -315,4 +428,41 @@ async function saveNotifyPrefs() {
 }
 .cfg-toggle.on { background: var(--accent) }
 .cfg-toggle.on::after { transform: translateX(16px) }
+.pref-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.pref-label {
+  flex-shrink: 0;
+  width: 110px;
+}
+.pref-key-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 32px;
+}
+.pref-key-input {
+  font-size: 12.5px !important;
+  height: 32px !important;
+}
+.pref-value-input {
+  flex: 1;
+  font-size: 12.5px !important;
+  height: 32px !important;
+}
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: background 120ms;
+}
+.btn-icon:hover {
+  background: var(--rule);
+}
 </style>

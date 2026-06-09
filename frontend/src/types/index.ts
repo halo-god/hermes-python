@@ -10,6 +10,7 @@ export interface User {
   source: string;
   role: "super_admin" | "admin" | "team_admin" | "member" | "viewer";
   status: string;
+  preferences: Record<string, string> | null;
   created_at: string;
   last_active_at: string | null;
 }
