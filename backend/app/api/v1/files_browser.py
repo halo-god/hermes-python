@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 
+import urllib.parse
+
 from fastapi import APIRouter, Depends, File as FastApiFile, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +22,29 @@ from app.core.files import read_upload_capped
 from app.config import settings
 
 router = APIRouter()
+
+_TEXT_EXTS = frozenset({
+    "txt", "md", "csv", "json", "html", "htm", "css", "js", "ts", "tsx",
+    "py", "go", "rs", "yaml", "yml", "toml", "sh", "bash", "log", "xml",
+    "diff", "patch",
+})
+
+
+async def _require_file_owner(
+    db: AsyncSession, file_id: uuid.UUID, user: User
+) -> WorkspaceFile:
+    """Load a WorkspaceFile and verify the requesting user owns it."""
+    wf = (
+        await db.execute(select(WorkspaceFile).where(WorkspaceFile.id == file_id))
+    ).scalars().first()
+    if not wf:
+        raise HTTPException(404, "File not found")
+    convo = (
+        await db.execute(select(Conversation).where(Conversation.id == wf.conversation_id))
+    ).scalars().first()
+    if not convo or convo.owner_id != user.id:
+        raise HTTPException(403, "Not authorized")
+    return wf
 
 
 class FileItem(BaseModel):
@@ -116,42 +143,35 @@ async def list_standalone_files(
     db: AsyncSession = Depends(get_db),
 ):
     """List user's standalone files, AI-generated files, and subfolders in a given folder."""
-    # Get user's regular conversations (for AI-generated files lookup)
-    convos = (
+    # AI-generated files: single JOIN query (was: load all convos then IN-clause)
+    ai_rows = (
         await db.execute(
-            select(Conversation).where(
+            select(WorkspaceFile, Conversation.title)
+            .join(Conversation, WorkspaceFile.conversation_id == Conversation.id)
+            .where(
                 Conversation.owner_id == user.id,
                 Conversation.title != "__file_storage__",
+                WorkspaceFile.folder_path == folder,
+                WorkspaceFile.is_folder == False,  # noqa: E712
             )
+            .limit(200)
         )
-    ).scalars().all()
-    convo_map = {c.id: c.title for c in convos}
+    ).all()
 
-    # AI-generated files from regular conversations (visible in file manager root)
     ai_files: list[FileItem] = []
-    if convo_map:
-        ai_ws_files = (
-            await db.execute(
-                select(WorkspaceFile).where(
-                    WorkspaceFile.conversation_id.in_(convo_map.keys()),
-                    WorkspaceFile.folder_path == folder,
-                    WorkspaceFile.is_folder == False,  # noqa: E712
-                )
-            )
-        ).scalars().all()
-        for wf in ai_ws_files:
-            ai_files.append(FileItem(
-                id=str(wf.id),
-                name=wf.name,
-                conversation_id=str(wf.conversation_id),
-                conversation_title=convo_map.get(wf.conversation_id, ""),
-                size=wf.size_bytes,
-                created_at=wf.created_at.isoformat() if wf.created_at else "",
-                source="ai",
-                kind=wf.kind,
-                storage_key=wf.storage_key,
-                folder_path=wf.folder_path or "/",
-            ))
+    for wf, convo_title in ai_rows:
+        ai_files.append(FileItem(
+            id=str(wf.id),
+            name=wf.name,
+            conversation_id=str(wf.conversation_id),
+            conversation_title=convo_title,
+            size=wf.size_bytes,
+            created_at=wf.created_at.isoformat() if wf.created_at else "",
+            source="ai",
+            kind=wf.kind,
+            storage_key=wf.storage_key,
+            folder_path=wf.folder_path or "/",
+        ))
 
     # Standalone storage conversation
     storage_convo = (
@@ -259,9 +279,7 @@ async def create_folder(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a folder as a real DB record."""
-    import re as _re
-    clean_name = _re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", name).strip("_. ") or "folder"
-    folder_path = parent.rstrip("/") + "/" + clean_name
+    clean_name = re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", name).strip("_. ") or "folder"
 
     # Ensure standalone conversation exists
     storage_convo = (
@@ -326,8 +344,7 @@ async def upload_standalone_file(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a file without requiring a conversation. Files are stored in user's personal space."""
-    import re as _re
-    name = _re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", file.filename or "upload").strip("_. ") or "upload"
+    name = re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", file.filename or "upload").strip("_. ") or "upload"
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else "bin"
     TEXT_EXTS = {"md", "txt", "json", "csv", "html", "htm", "js", "ts", "py", "go", "rs",
                  "yaml", "yml", "toml", "sh", "bash", "log", "xml", "css", "diff", "patch"}
@@ -351,14 +368,11 @@ async def upload_standalone_file(
     # Actually, let's use a special conversation_id = NULL approach
     # But WorkspaceFile requires conversation_id, so we need to handle this differently
     # Let's create a dedicated "File Storage" conversation per user
-    from sqlalchemy import and_
     storage_convo = (
         await db.execute(
             select(Conversation).where(
-                and_(
-                    Conversation.owner_id == user.id,
-                    Conversation.title == "__file_storage__",
-                )
+                Conversation.owner_id == user.id,
+                Conversation.title == "__file_storage__",
             )
         )
     ).scalars().first()
@@ -406,13 +420,7 @@ async def get_file_raw(
     db: AsyncSession = Depends(get_db),
 ):
     """Download a standalone file by ID."""
-    wf = (await db.execute(select(WorkspaceFile).where(WorkspaceFile.id == file_id))).scalars().first()
-    if not wf:
-        raise HTTPException(404, "File not found")
-
-    convo = (await db.execute(select(Conversation).where(Conversation.id == wf.conversation_id))).scalars().first()
-    if not convo or convo.owner_id != user.id:
-        raise HTTPException(403, "Not authorized")
+    wf = await _require_file_owner(db, file_id, user)
 
     content: bytes | None = None
     content_type = "application/octet-stream"
@@ -423,13 +431,10 @@ async def get_file_raw(
             raise HTTPException(404, "File not found in storage")
     elif wf.content:
         content = wf.content.encode("utf-8") if isinstance(wf.content, str) else wf.content
-        if wf.kind in {"txt", "md", "csv", "json", "html", "css", "js", "py", "yaml", "yml", "xml"}:
+        if wf.kind in _TEXT_EXTS:
             content_type = "text/plain; charset=utf-8"
     else:
         raise HTTPException(404, "File has no content")
-
-    import urllib.parse
-    from fastapi.responses import Response
 
     filename = wf.name or "download"
     disposition = f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}"
@@ -505,22 +510,7 @@ async def move_file_to_folder(
     db: AsyncSession = Depends(get_db),
 ):
     """Move a standalone file into a different folder."""
-    wf = (
-        await db.execute(
-            select(WorkspaceFile).where(WorkspaceFile.id == file_id)
-        )
-    ).scalars().first()
-    if not wf:
-        raise HTTPException(404, "File not found")
-
-    # Verify ownership
-    convo = (
-        await db.execute(
-            select(Conversation).where(Conversation.id == wf.conversation_id)
-        )
-    ).scalars().first()
-    if not convo or convo.owner_id != user.id:
-        raise HTTPException(403, "Not authorized")
+    wf = await _require_file_owner(db, file_id, user)
 
     if wf.is_folder:
         raise HTTPException(400, "Cannot move folders, only files")
@@ -550,14 +540,7 @@ async def get_file_content(
     db: AsyncSession = Depends(get_db),
 ):
     """Get content of a standalone file by ID."""
-    wf = (await db.execute(select(WorkspaceFile).where(WorkspaceFile.id == file_id))).scalars().first()
-    if not wf:
-        raise HTTPException(404, "File not found")
-
-    # Verify ownership through conversation
-    convo = (await db.execute(select(Conversation).where(Conversation.id == wf.conversation_id))).scalars().first()
-    if not convo or convo.owner_id != user.id:
-        raise HTTPException(403, "Not authorized")
+    wf = await _require_file_owner(db, file_id, user)
 
     content = None
     if wf.content:
@@ -579,14 +562,7 @@ async def delete_standalone_file(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a standalone file."""
-    wf = (await db.execute(select(WorkspaceFile).where(WorkspaceFile.id == file_id))).scalars().first()
-    if not wf:
-        raise HTTPException(404, "File not found")
-
-    # Verify ownership through conversation
-    convo = (await db.execute(select(Conversation).where(Conversation.id == wf.conversation_id))).scalars().first()
-    if not convo or convo.owner_id != user.id:
-        raise HTTPException(403, "Not authorized")
+    wf = await _require_file_owner(db, file_id, user)
 
     # Delete from MinIO if stored there
     if wf.storage_key:
