@@ -6,7 +6,7 @@ import { teamsApi } from "@/api/teams";
 import { tokenStore } from "@/api/client";
 import { useStream } from "@/composables/useStream";
 import { useNotificationStore } from "@/stores/notifications";
-import type { Conversation, Message, Team, WorkspaceFile, ConfirmationRequest, PlanEntry } from "@/types";
+import type { ClarifyEntry, Conversation, Message, StreamEvent, Team, WorkspaceFile, ConfirmationRequest, PlanEntry } from "@/types";
 import type { Profile } from "@/api/agents";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api/v1";
@@ -80,6 +80,7 @@ export const useChatStore = defineStore("chat", () => {
     hasMoreMessages.value = true;
     contextTokens.value = 0;
     contextSize.value = 0;
+    pendingConfirmations.value = []; // modals belong to the previous conversation
     try {
       const detail = await conversationsApi.get(id);
       // Map content.tool_calls to steps for persisted messages
@@ -104,10 +105,29 @@ export const useChatStore = defineStore("chat", () => {
       // Reconnect SSE if conversation has a streaming message
       const streamingMsg = messages.value.find((m) => m.status === "streaming");
       if (streamingMsg) {
+        // Restore the clarify modal lost on refresh — pending entries are
+        // persisted in the streaming message's content by the runner.
+        const clarifies = (streamingMsg.content as Record<string, unknown>).clarifies as ClarifyEntry[] | undefined;
+        for (const c of clarifies || []) {
+          if (c.status === "pending" && !pendingConfirmations.value.find((r) => r.id === c.id)) {
+            pendingConfirmations.value.push({
+              id: c.id,
+              conversation_id: id,
+              message_id: streamingMsg.id,
+              question: c.question,
+              options: c.options,
+              questions: [{ question: c.question, options: c.options, allow_free_text: true }],
+            });
+          }
+        }
         streamingConvoId.value = id;
         registerStreamHandlers();
         const token = tokenStore.access;
-        const url = `${API_BASE}/conversations/${id}/stream?access_token=${encodeURIComponent(token || "")}`;
+        // Replay the in-flight turn from its start: the event stream is
+        // durable, so tokens emitted while we were away are recovered.
+        const sinceMs = Date.parse(streamingMsg.created_at);
+        const since = Number.isFinite(sinceMs) ? `&since=${Math.max(sinceMs - 1, 0)}-0` : "";
+        const url = `${API_BASE}/conversations/${id}/stream?access_token=${encodeURIComponent(token || "")}${since}`;
         await stream.openSSE(url);
       }
     } finally {
@@ -184,13 +204,24 @@ export const useChatStore = defineStore("chat", () => {
 
   // ── Stream event handlers (4.1 message flow pattern) ──
 
+  /** Drop events that belong to another conversation — switching mid-stream
+   *  used to leak the old conversation's tokens into the new message list. */
+  function scoped<T extends StreamEvent>(fn: (ev: T) => void): (ev: T) => void {
+    return (ev) => {
+      if (ev.conversation_id && ev.conversation_id !== activeId.value) return;
+      fn(ev);
+    };
+  }
+
   function registerStreamHandlers() {
     stream.offAll();
 
-    stream.on("token", (ev) => {
+    stream.on("token", scoped((ev) => {
       const m = find(ev.message_id);
-      if (m) m.content = { ...m.content, text: (m.content.text || "") + ev.delta };
-    });
+      // Only append to a streaming message: replayed tokens after the message
+      // was finalized (done carries the full text) must not double-append.
+      if (m && m.status === "streaming") m.content = { ...m.content, text: (m.content.text || "") + ev.delta };
+    }));
 
     // Debounced refresh: intermediate "done" events (multi-message split) are followed
     // by a "start" event within ~100ms. Delay refresh to avoid killing the SSE stream.
@@ -206,7 +237,7 @@ export const useChatStore = defineStore("chat", () => {
       if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
     };
 
-    stream.on("start", (ev) => {
+    stream.on("start", scoped((ev) => {
       cancelRefresh();  // New message coming, don't close stream
       if (!find(ev.message_id)) {
         messages.value.push({
@@ -220,9 +251,9 @@ export const useChatStore = defineStore("chat", () => {
           created_at: new Date().toISOString(),
         });
       }
-    });
+    }));
 
-    stream.on("rt_start", (ev) => {
+    stream.on("rt_start", scoped((ev) => {
       if (!find(ev.message_id)) {
         const replies = [...ev.agents]
           .sort((a, b) => a.slot - b.slot)
@@ -238,29 +269,29 @@ export const useChatStore = defineStore("chat", () => {
           created_at: new Date().toISOString(),
         });
       }
-    });
+    }));
 
-    stream.on("rt_token", (ev) => {
+    stream.on("rt_token", scoped((ev) => {
       const r = find(ev.message_id)?.content.replies?.[ev.slot];
-      if (r) r.text += ev.delta;
-    });
+      if (r && r.status === "streaming") r.text += ev.delta;
+    }));
 
-    stream.on("rt_reply_done", (ev) => {
+    stream.on("rt_reply_done", scoped((ev) => {
       const r = find(ev.message_id)?.content.replies?.[ev.slot];
-      if (r) r.status = "complete";
-    });
+      if (r) r.status = ev.status || "complete";
+    }));
 
-    stream.on("merge_start", (ev) => {
+    stream.on("merge_start", scoped((ev) => {
       const merged = find(ev.message_id)?.content.merged;
       if (merged) merged.status = "streaming";
-    });
+    }));
 
-    stream.on("merge_token", (ev) => {
+    stream.on("merge_token", scoped((ev) => {
       const merged = find(ev.message_id)?.content.merged;
-      if (merged) merged.text += ev.delta;
-    });
+      if (merged && merged.status === "streaming") merged.text += ev.delta;
+    }));
 
-    stream.on("tool_call", (ev) => {
+    stream.on("tool_call", scoped((ev) => {
       const m = find(ev.message_id);
       if (m) {
         if (!m.steps) m.steps = [];
@@ -268,19 +299,19 @@ export const useChatStore = defineStore("chat", () => {
         if (existing) existing.status = ev.status || existing.status;
         else m.steps.push({ title: ev.title || "调用工具", status: ev.status || "running" });
       }
-    });
+    }));
 
-    stream.on("thought", (ev) => {
+    stream.on("thought", scoped((ev) => {
       const m = find(ev.message_id);
-      if (m) m.thinking = (m.thinking || "") + ev.delta;
-    });
+      if (m && m.status === "streaming") m.thinking = (m.thinking || "") + ev.delta;
+    }));
 
-    stream.on("plan", (ev) => {
+    stream.on("plan", scoped((ev) => {
       const m = find(ev.message_id);
       if (m) m.plan = ev.entries;
-    });
+    }));
 
-    stream.on("usage", (ev) => {
+    stream.on("usage", scoped((ev) => {
       const m = find(ev.message_id);
       const usage: Record<string, number> = {};
       if (ev.input_tokens != null) usage.input_tokens = ev.input_tokens;
@@ -294,16 +325,16 @@ export const useChatStore = defineStore("chat", () => {
       } else {
         contextTokens.value = (ev.input_tokens || 0) + (ev.output_tokens || 0);
       }
-    });
+    }));
 
-    stream.on("session_info", (ev) => {
+    stream.on("session_info", scoped((ev) => {
       if (ev.title) {
         const c = conversations.value.find((c) => c.id === activeId.value);
         if (c && c.title === "新会话") c.title = ev.title;
       }
-    });
+    }));
 
-    stream.on("file", (ev) => {
+    stream.on("file", scoped((ev) => {
       const m = find(ev.message_id);
       if (m) {
         if (!m.content.files) m.content = { ...m.content, files: [] };
@@ -315,9 +346,11 @@ export const useChatStore = defineStore("chat", () => {
       if (activeId.value) {
         conversationsApi.files(activeId.value).then((f) => (files.value = f)).catch(() => {});
       }
-    });
+    }));
 
-    stream.on("confirmation_request", (ev) => {
+    stream.on("confirmation_request", scoped((ev) => {
+      // Dedupe: replay after reconnect (or modal restore) may re-deliver it
+      if (pendingConfirmations.value.find((r) => r.id === ev.request.id)) return;
       pendingConfirmations.value.push(ev.request);
       // Notify user
       const ns = useNotificationStore();
@@ -325,15 +358,20 @@ export const useChatStore = defineStore("chat", () => {
       if (document.hidden && "Notification" in window && Notification.permission === "granted") {
         new Notification("Hermes · 需要确认", { body: ev.request.question || "AI 需要你的确认", tag: "hermes-confirm" });
       }
-    });
+    }));
 
-    stream.on("confirmation_response", (ev) => {
+    stream.on("confirmation_response", scoped((ev) => {
       pendingConfirmations.value = pendingConfirmations.value.filter(
         (r) => r.id !== ev.request_id,
       );
-    });
+    }));
 
-    stream.on("done", (ev) => {
+    stream.on("clarify_auto", scoped((ev) => {
+      const ns = useNotificationStore();
+      ns.push({ title: "已自动确认", body: `${ev.question} → ${ev.choice}`, kind: "info" });
+    }));
+
+    stream.on("done", scoped((ev) => {
       const m = find(ev.message_id);
       if (m) {
         m.status = (ev.status as Message["status"]) || "complete";
@@ -353,13 +391,13 @@ export const useChatStore = defineStore("chat", () => {
         }
       }
       scheduleRefresh();  // Delayed: cancel if a new "start" event follows
-    });
+    }));
 
-    stream.on("error", (ev) => {
+    stream.on("error", scoped((ev) => {
       const m = find(ev.message_id);
       if (m) m.status = "error";
       scheduleRefresh();
-    });
+    }));
   }
 
   async function send(
@@ -434,7 +472,10 @@ export const useChatStore = defineStore("chat", () => {
     await stream.openSSE(url);
 
     const res = await conversationsApi.send(id, text, opts);
-    messages.value.push(res.user_message, res.agent_message);
+    // The SSE "start" event may have already created the agent bubble — guard
+    // both pushes or the message shows up twice.
+    if (!find(res.user_message.id)) messages.value.push(res.user_message);
+    if (!find(res.agent_message.id)) messages.value.push(res.agent_message);
   }
 
   /** Roundtable: bidirectional WebSocket — send + stream over one socket. */
@@ -452,7 +493,7 @@ export const useChatStore = defineStore("chat", () => {
 
     // Optimistic user bubble
     messages.value.push({
-      id: `tmp-${Date.now()}`,
+      id: `tmp-${crypto.randomUUID()}`,
       conversation_id: id,
       owner_id: null,
       role: "user",
@@ -509,6 +550,7 @@ export const useChatStore = defineStore("chat", () => {
     files.value = [];
     activeAgents.value = ["hermes"];
     activeProfiles.value = [];
+    pendingConfirmations.value = [];
   }
 
   return {

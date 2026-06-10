@@ -193,6 +193,67 @@ async def _resolve_attached_files(
     return result
 
 
+# ── Prompt directives (single source — these used to be duplicated inline) ──
+
+_FILE_WRITE_PREAMBLE = (
+    "【文件写入规范】当你需要为用户创建、生成或导出文件时，"
+    "必须使用 write_file 工具将文件写入当前工作目录（cwd）。"
+    "文件路径使用相对路径（如 'README.md'、'src/main.py'），不要使用绝对路径。"
+    "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
+    "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
+)
+
+_CLARIFY_PREAMBLE = (
+    "\n\n【强制规则：必须先确认再行动】\n"
+    "当用户的请求有以下任一情况时，你必须先调用 clarify 工具，不要直接回答：\n"
+    "- 请求模糊、有多种理解方式\n"
+    "- 需要用户选择方向、风格、范围\n"
+    "- 涉及重要决策或有风险的操作\n"
+    "- 用户输入非常简短（少于10个字）\n\n"
+    "调用方式（必须是工具调用，不要输出文本格式）：\n"
+    'clarify(question="问题", choices=["选项A", "选项B", "选项C"])\n'
+    'clarify(question="你具体想要什么？")  # 无选项时用 open-ended\n\n'
+    "禁止在回复文本中输出 [确认] 或类似的标记格式。必须通过工具调用 clarify。\n"
+    "违反此规则会导致用户不满。记住：先问再做。"
+)
+
+_STRICT_MODE = (
+    "\n\n【严格模式】用户输入非常简短，你无法确定用户意图。"
+    "你必须先调用 clarify 工具询问用户想要什么，不要直接猜测并执行。"
+    "这是强制要求，不是建议。"
+)
+
+_ANTI_CLARIFY = (
+    "重要：用户在对话中的简短回复（如'继续'、'好的'、'是的'、'ok'、单句指令等）"
+    "是明确的意图表达，不要调用 clarify 工具追问。直接执行用户的意图即可。"
+    "只有当用户的请求真正存在多种互不相同的理解方式时才需要澄清。"
+)
+
+# Roundtable replies run without the clarify polling loop — a clarify call
+# there would block the agent until timeout with nobody able to answer.
+_NO_CLARIFY_ROUNDTABLE = (
+    "\n\n注意：当前是多助手圆桌模式，无法弹出交互确认，不要调用 clarify 工具。"
+    "如有歧义请基于最合理的假设直接作答，并简要说明你的假设。"
+)
+
+
+def _clarify_directives(is_first_turn: bool, text: str) -> str:
+    """Clarify preamble for the FIRST turn of a conversation only.
+
+    Follow-up turns get the anti-clarify line via the system prompt instead;
+    injecting both used to hand the model contradictory instructions on every
+    short reply ("必须 clarify" vs "不要 clarify").
+    """
+    if (settings.clarify_strategy or "").strip().lower() == "disabled":
+        return ""
+    if not is_first_turn:
+        return ""
+    out = _CLARIFY_PREAMBLE
+    if len(text.strip()) < 15:
+        out += _STRICT_MODE
+    return out
+
+
 async def send_user_only(
     db: AsyncSession,
     convo: Conversation,
@@ -223,24 +284,34 @@ async def send_message(
     attached_file_ids: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
     system_prompt: str | None = None,
+    existing_user_msg: Message | None = None,
 ) -> tuple[Message, Message]:
     """Persist the user turn + an empty streaming agent turn, then enqueue ACP work.
 
-    The per-token hot path does NOT touch the DB — the runner streams via Redis
-    Pub/Sub and writes the agent message once on completion.
+    The per-token hot path does NOT touch the DB — the runner streams events
+    and writes the agent message once on completion. Pass existing_user_msg
+    when the caller already persisted the user turn (group dispatch) to avoid
+    a duplicate user row.
     """
-    attached = await _resolve_attached_files(db, attached_file_ids or [], conversation_id=str(convo.id))
-    user_content: dict = {"text": text}
-    if attached:
-        user_content["files"] = attached
+    # NOTE: read acp_session_id before any commit expires the instance —
+    # _clarify_directives needs it to detect first-turn vs follow-up.
+    is_first_turn = convo.acp_session_id is None
 
-    user_msg = Message(
-        conversation_id=convo.id,
-        owner_id=owner_id,
-        role="user",
-        content=user_content,
-        status="complete",
-    )
+    attached = await _resolve_attached_files(db, attached_file_ids or [], conversation_id=str(convo.id))
+    if existing_user_msg is None:
+        user_content: dict = {"text": text}
+        if attached:
+            user_content["files"] = attached
+        user_msg = Message(
+            conversation_id=convo.id,
+            owner_id=owner_id,
+            role="user",
+            content=user_content,
+            status="complete",
+        )
+        db.add(user_msg)
+    else:
+        user_msg = existing_user_msg
     agent_msg = Message(
         conversation_id=convo.id,
         role="agent",
@@ -248,7 +319,7 @@ async def send_message(
         content={"text": ""},
         status="streaming",
     )
-    db.add_all([user_msg, agent_msg])
+    db.add(agent_msg)
 
     # Auto-title from the first user message.
     if convo.title == "新会话":
@@ -260,34 +331,6 @@ async def send_message(
 
     # Build prompt — use ACP content blocks for structured attachment handling.
     # Images: ImageContentBlock (base64), Text files: Resource Link + inline fallback.
-    _file_write_preamble = (
-        "【文件写入规范】当你需要为用户创建、生成或导出文件时，"
-        "必须使用 write_file 工具将文件写入当前工作目录（cwd）。"
-        "文件路径使用相对路径（如 'README.md'、'src/main.py'），不要使用绝对路径。"
-        "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
-        "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
-    )
-    _clarification_preamble = (
-        "\n\n【强制规则：必须先确认再行动】\n"
-        "当用户的请求有以下任一情况时，你必须先调用 clarify 工具，不要直接回答：\n"
-        "- 请求模糊、有多种理解方式\n"
-        "- 需要用户选择方向、风格、范围\n"
-        "- 涉及重要决策或有风险的操作\n"
-        "- 用户输入非常简短（少于10个字）\n\n"
-        "调用方式（必须是工具调用，不要输出文本格式）：\n"
-        'clarify(question="问题", choices=["选项A", "选项B", "选项C"])\n'
-        'clarify(question="你具体想要什么？")  # 无选项时用 open-ended\n\n'
-        "禁止在回复文本中输出 [确认] 或类似的标记格式。必须通过工具调用 clarify。\n"
-        "违反此规则会导致用户不满。记住：先问再做。"
-    )
-    _strict_mode = ""
-    if len(text.strip()) < 15:
-        _strict_mode = (
-            "\n\n【严格模式】用户输入非常简短，你无法确定用户意图。"
-            "你必须先调用 clarify 工具询问用户想要什么，不要直接猜测并执行。"
-            "这是强制要求，不是建议。"
-        )
-
     # Build content blocks for ACP protocol
     prompt_blocks: list[dict] = []
 
@@ -312,7 +355,7 @@ async def send_message(
         if text_parts:
             prompt_text = f"{text}\n\n" + "\n\n".join(text_parts)
 
-    full_text = f"{_file_write_preamble}{_clarification_preamble}{_strict_mode}\n\n{prompt_text}"
+    full_text = f"{_FILE_WRITE_PREAMBLE}{_clarify_directives(is_first_turn, text)}\n\n{prompt_text}"
     prompt_blocks.append({"type": "text", "text": full_text})
 
     # Add Resource Link blocks for attached files (agent can read from workspace)
@@ -405,36 +448,9 @@ async def send_roundtable(
         file_block = "\n\n".join(parts)
         prompt_text = f"{text}\n\n{file_block}"
 
-    # Inject file-write instructions for roundtable agents too
-    _file_write_preamble = (
-        "【文件写入规范】当你需要为用户创建、生成或导出文件时，"
-        "必须使用 write_file 工具将文件写入当前工作目录（cwd）。"
-        "文件路径使用相对路径（如 'README.md'、'src/main.py'），不要使用绝对路径。"
-        "不要只在回复文本中说\"文件已生成\"或给出文件路径而不实际写入。"
-        "文件名请使用有意义的名称（如 会议纪要.md、report.csv），不要使用临时路径。"
-    )
-    _clarification_preamble = (
-        "\n\n【强制规则：必须先确认再行动】\n"
-        "当用户的请求有以下任一情况时，你必须先调用 clarify 工具，不要直接回答：\n"
-        "- 请求模糊、有多种理解方式\n"
-        "- 需要用户选择方向、风格、范围\n"
-        "- 涉及重要决策或有风险的操作\n"
-        "- 用户输入非常简短（少于10个字）\n\n"
-        "调用方式（必须是工具调用，不要输出文本格式）：\n"
-        'clarify(question="问题", choices=["选项A", "选项B", "选项C"])\n'
-        'clarify(question="你具体想要什么？")  # 无选项时用 open-ended\n\n'
-        "禁止在回复文本中输出 [确认] 或类似的标记格式。必须通过工具调用 clarify。\n"
-        "违反此规则会导致用户不满。记住：先问再做。"
-    )
-    # Strict mode for short prompts: force clarify call
-    _strict_mode = ""
-    if len(text.strip()) < 15:
-        _strict_mode = (
-            "\n\n【严格模式】用户输入非常简短，你无法确定用户意图。"
-            "你必须先调用 clarify 工具询问用户想要什么，不要直接猜测并执行。"
-            "这是强制要求，不是建议。"
-        )
-    prompt_text = f"{_file_write_preamble}{_clarification_preamble}{_strict_mode}\n\n{prompt_text}"
+    # File-write instructions for roundtable agents; clarify is explicitly
+    # disallowed here because nobody can answer a modal mid-roundtable.
+    prompt_text = f"{_FILE_WRITE_PREAMBLE}{_NO_CLARIFY_ROUNDTABLE}\n\n{prompt_text}"
 
     await redis_core.clear_cancel(str(convo.id))
     await redis_core.enqueue_prompt(
@@ -494,13 +510,10 @@ async def dispatch(
     if prefs_prompt:
         system_prompt = f"{system_prompt}\n\n{prefs_prompt}" if system_prompt else prefs_prompt
 
-    # Anti-clarify: short follow-up messages are intentional in conversation context
-    anti_clarify = (
-        "重要：用户在对话中的简短回复（如'继续'、'好的'、'是的'、'ok'、单句指令等）"
-        "是明确的意图表达，不要调用 clarify 工具追问。直接执行用户的意图即可。"
-        "只有当用户的请求真正存在多种互不相同的理解方式时才需要澄清。"
-    )
-    system_prompt = f"{system_prompt}\n\n{anti_clarify}" if system_prompt else anti_clarify
+    # Anti-clarify guidance only on follow-up turns — the first turn carries the
+    # clarify preamble, and sending both contradicted each other.
+    if convo.acp_session_id and len(agents) == 1:
+        system_prompt = f"{system_prompt}\n\n{_ANTI_CLARIFY}" if system_prompt else _ANTI_CLARIFY
 
     if len(agents) > 1:
         return await send_roundtable(
@@ -1026,18 +1039,17 @@ async def dispatch_group(
             system_prompt = f"{system_prompt}\n\n{prefs_prompt}" if system_prompt else prefs_prompt
 
         # Anti-clarify for short follow-ups
-        anti_clarify = (
-            "重要：用户在对话中的简短回复（如'继续'、'好的'、'是的'、'ok'、单句指令等）"
-            "是明确的意图表达，不要调用 clarify 工具追问。直接执行用户的意图即可。"
-            "只有当用户的请求真正存在多种互不相同的理解方式时才需要澄清。"
-        )
-        system_prompt = f"{system_prompt}\n\n{anti_clarify}" if system_prompt else anti_clarify
+        if convo.acp_session_id:
+            system_prompt = f"{system_prompt}\n\n{_ANTI_CLARIFY}" if system_prompt else _ANTI_CLARIFY
 
+        # Reuse the user message persisted above — send_message used to create
+        # a second user row for every group @single-agent message.
         _, agent_msg = await send_message(
             db, convo, text,
             attached_file_ids=attached_file_ids,
             owner_id=owner_id,
             system_prompt=system_prompt,
+            existing_user_msg=user_msg,
         )
         return user_msg, agent_msg
 
@@ -1053,14 +1065,6 @@ async def dispatch_group(
     prefs_prompt = await _build_preferences_prompt(db, owner_id)
     if prefs_prompt:
         system_prompt = f"{system_prompt}\n\n{prefs_prompt}" if system_prompt else prefs_prompt
-
-    # Anti-clarify for short follow-ups
-    anti_clarify = (
-        "重要：用户在对话中的简短回复（如'继续'、'好的'、'是的'、'ok'、单句指令等）"
-        "是明确的意图表达，不要调用 clarify 工具追问。直接执行用户的意图即可。"
-        "只有当用户的请求真正存在多种互不相同的理解方式时才需要澄清。"
-    )
-    system_prompt = f"{system_prompt}\n\n{anti_clarify}" if system_prompt else anti_clarify
 
     return await send_roundtable(
         db, convo, text, resolved,

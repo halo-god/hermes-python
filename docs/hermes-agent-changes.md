@@ -34,27 +34,29 @@ pip install redis
 
 ---
 
-## 3. acp_adapter/session.py — clarify_callback 桥接 Redis
+## 3. acp_adapter/session.py — clarify_callback 桥接 Redis（协议 v2：LIST + BLPOP）
 
 **文件**: `acp_adapter/session.py`  
 **位置**: `SessionManager._create_agent()` 方法末尾，`return agent` 之前  
 **改动**: 添加 `_acp_clarify_callback` 函数并绑定到 `agent.clarify_callback`
 
+> **v2 协议说明**：旧版（GET + pubsub）存在结构性竞态——runner 的应答可能在
+> callback 订阅 pubsub 之前发出，导致 agent 干等 5 分钟超时。v2 改用
+> RPUSH/BLPOP：即使应答先于等待到达，BLPOP 也会立即返回，无需任何时序协调。
+
 ```python
-        # ── Clarify callback: bridge agent's clarify tool → Redis ──
-        # When the agent calls clarify(), this callback writes the request to
-        # Redis so the runner can pick it up and show a confirmation modal.
-        # It then blocks (sync, on the agent thread) until the user responds.
+        # ── Clarify callback: bridge agent's clarify tool → Redis (v2) ──
+        # RPUSH the request onto a per-session list; the runner LPOPs it and
+        # shows a confirmation modal. Then BLPOP the per-clarify response list —
+        # race-free: BLPOP returns even if the answer was pushed before we wait.
         def _acp_clarify_callback(question: str, choices=None) -> str:
             import redis as _sync_redis
             import uuid as _uuid
 
             clarify_id = _uuid.uuid4().hex[:12]
-            pending_key = f"hermes:clarify_pending:{session_id}"
-            response_key = f"hermes:clarify_response:{session_id}:{clarify_id}"
-            notify_channel = f"hermes:clarify_notify:{session_id}"
+            req_key = f"hermes:clarify:req:{session_id}"
+            resp_key = f"hermes:clarify:resp:{session_id}:{clarify_id}"
 
-            # Write pending request to Redis (runner reads this)
             data = {
                 "clarify_id": clarify_id,
                 "question": question,
@@ -64,47 +66,38 @@ pip install redis
                 r = _sync_redis.Redis.from_url(
                     os.environ.get("REDIS_URL", "redis://localhost:6379")
                 )
-                r.set(pending_key, json.dumps(data), ex=600)
-                r.publish(notify_channel, clarify_id)
+                r.rpush(req_key, json.dumps(data))
+                r.expire(req_key, 600)
             except Exception:
                 logger.warning("Failed to write clarify request to Redis", exc_info=True)
                 return json.dumps({"error": "Redis unavailable"})
 
-            # Wait for user response (blocks agent thread, up to 5 min)
-            pubsub = r.pubsub()
-            pubsub.subscribe(notify_channel)
-            deadline = time.time() + 300
-            try:
-                while time.time() < deadline:
-                    msg = pubsub.get_message(
-                        ignore_subscribe_messages=True, timeout=1.0
-                    )
-                    if msg and msg["type"] == "message":
-                        resp_val = r.get(response_key)
-                        if resp_val:
-                            r.delete(response_key)
-                            return resp_val.decode("utf-8") if isinstance(resp_val, bytes) else str(resp_val)
+            # Block (agent thread) until the runner pushes the answer, max 5 min.
+            res = r.blpop(resp_key, timeout=300)
+            if res is None:
                 return json.dumps({"choice": "超时"})
-            finally:
-                pubsub.unsubscribe()
-                pubsub.close()
+            val = res[1]
+            return val.decode("utf-8") if isinstance(val, bytes) else str(val)
 
         agent.clarify_callback = _acp_clarify_callback
 ```
 
-**Redis Key 约定**:
-| Key | 用途 |
-|-----|------|
-| `hermes:clarify_pending:{session_id}` | agent → runner: 待处理的确认请求 (JSON, TTL 600s) |
-| `hermes:clarify_response:{session_id}:{clarify_id}` | runner → agent: 用户响应 (纯文本, TTL 60s) |
-| `hermes:clarify_notify:{session_id}` | PubSub 通道: 双向通知 |
+**Redis Key 约定（v2）**:
+| Key | 类型 | 用途 |
+|-----|------|------|
+| `hermes:clarify:req:{session_id}` | LIST | agent → runner: 确认请求队列 (RPUSH/LPOP, TTL 600s) |
+| `hermes:clarify:resp:{session_id}:{clarify_id}` | LIST | runner → agent: 用户应答 (RPUSH/BLPOP, TTL 60s) |
 
 **流程**:
-1. Agent 调用 clarify 工具 → callback 写 `clarify_pending` 到 Redis
-2. Callback 订阅 `clarify_notify` 通道并阻塞等待
-3. Runner 检测到 tool_call 含 "clarify" → 读 `clarify_pending` → 发 SSE 给前端
-4. 用户在前端选择 → API 写 `clarify_response` + publish `clarify_notify`
-5. Callback 收到通知 → 读 `clarify_response` → 返回给 agent → agent 继续
+1. Agent 调用 clarify 工具 → callback `RPUSH` 请求到 `clarify:req` 队列
+2. Callback `BLPOP clarify:resp:{sid}:{clarify_id}` 阻塞等待
+3. Runner 在 prompt 轮询中 `LPOP clarify:req` → 按策略自动应答或发 SSE 弹窗
+4. 用户选择 → API 确认 → runner `RPUSH` 应答（取消/超时也会推送，agent 永不悬挂）
+5. BLPOP 返回 → agent 继续
+
+**兼容性**: runner 的 `clarify_protocol=dual`（默认）同时消费旧 `clarify_pending`
+key 并双写旧应答格式，所以未更新此补丁的旧 agent 仍可工作；全部部署更新后可将
+runner 配置切为 `clarify_protocol=v2`。
 
 ---
 

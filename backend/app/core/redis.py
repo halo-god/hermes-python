@@ -40,14 +40,20 @@ async def is_blacklisted(jti: str) -> bool:
     return bool(await get_redis().exists(f"{_BLACKLIST_PREFIX}{jti}"))
 
 
-# ── ACP prompt queue (Redis Stream) + live event channel (Pub/Sub) ──
+# ── ACP prompt queue (Redis Stream) + live event stream (per conversation) ──
 import json as _json  # noqa: E402
 
 from app.config import settings  # noqa: E402
 
+# Live events are stored in a capped per-conversation Redis Stream (not Pub/Sub):
+# Streams replay, so a subscriber that connects after events were published —
+# or an SSE client reconnecting with Last-Event-ID — never loses tokens.
+EVENT_STREAM_MAXLEN = 2000
+EVENT_STREAM_TTL = 86_400  # seconds
 
-def conv_channel(conversation_id: str) -> str:
-    return f"chan:conv:{conversation_id}"
+
+def conv_stream(conversation_id: str) -> str:
+    return f"evt:conv:{conversation_id}"
 
 
 def cancel_key(conversation_id: str) -> str:
@@ -60,8 +66,47 @@ async def enqueue_prompt(payload: dict) -> str:
 
 
 async def publish_event(conversation_id: str, event: dict) -> None:
-    """Publish a streaming event to the conversation's live channel (hot path)."""
-    await get_redis().publish(conv_channel(conversation_id), _json.dumps(event))
+    """Append a streaming event to the conversation's live stream (hot path).
+
+    Retries once: a transient Redis blip must not permanently drop tokens.
+    """
+    event.setdefault("conversation_id", conversation_id)
+    payload = _json.dumps(event)
+    key = conv_stream(conversation_id)
+    for attempt in (1, 2):
+        try:
+            r = get_redis()
+            pipe = r.pipeline()
+            pipe.xadd(key, {"data": payload}, maxlen=EVENT_STREAM_MAXLEN, approximate=True)
+            pipe.expire(key, EVENT_STREAM_TTL)
+            await pipe.execute()
+            return
+        except Exception:
+            if attempt == 2:
+                raise
+            await _asyncio.sleep(0.05)
+
+
+async def latest_event_id(conversation_id: str) -> str:
+    """Return the id of the newest event in the conversation stream ('0-0' if empty)."""
+    entries = await get_redis().xrevrange(conv_stream(conversation_id), count=1)
+    return entries[0][0] if entries else "0-0"
+
+
+async def read_events(
+    conversation_id: str, last_id: str, block_ms: int = 8000, count: int = 256
+) -> list[tuple[str, str]]:
+    """Blocking read of events after `last_id`. Returns [(entry_id, json_str), ...]."""
+    resp = await get_redis().xread(
+        {conv_stream(conversation_id): last_id}, count=count, block=block_ms
+    )
+    out: list[tuple[str, str]] = []
+    for _key, entries in resp or []:
+        for entry_id, fields in entries:
+            data = fields.get("data")
+            if data is not None:
+                out.append((entry_id, data))
+    return out
 
 
 async def request_cancel(conversation_id: str) -> None:
@@ -78,13 +123,21 @@ async def clear_cancel(conversation_id: str) -> None:
 
 # ── AI Confirmation requests ──
 import asyncio as _asyncio  # noqa: E402
+from contextlib import suppress as _suppress  # noqa: E402
 
 
 def confirm_key(conversation_id: str, request_id: str) -> str:
     return f"confirm:{conversation_id}:{request_id}"
 
 
-async def wait_for_confirmation(conversation_id: str, request_id: str, timeout: int = 300) -> dict:
+async def wait_for_confirmation(
+    conversation_id: str, request_id: str, timeout: int = 300, *, cancel_check: bool = False
+) -> dict:
+    """Wait for the user's answer to a confirmation/clarify modal.
+
+    With cancel_check=True the wait also watches the conversation's cancel flag,
+    so hitting 取消 unblocks a clarify-waiting agent immediately.
+    """
     key = confirm_key(conversation_id, request_id)
     pubsub_key = f"confirm_notify:{conversation_id}"
     pubsub = get_redis().pubsub()
@@ -105,10 +158,14 @@ async def wait_for_confirmation(conversation_id: str, request_id: str, timeout: 
                 if val:
                     await get_redis().delete(key)
                     return _json.loads(val)
+            if cancel_check and await is_cancelled(conversation_id):
+                return {"choice": "已取消"}
         return {"choice": "超时"}
     finally:
-        await pubsub.unsubscribe(pubsub_key)
-        await pubsub.close()
+        with _suppress(Exception):
+            await pubsub.unsubscribe(pubsub_key)
+        with _suppress(Exception):
+            await pubsub.aclose()
 
 
 async def respond_to_confirmation(conversation_id: str, request_id: str, choice: str) -> None:
@@ -116,6 +173,20 @@ async def respond_to_confirmation(conversation_id: str, request_id: str, choice:
     await get_redis().set(key, _json.dumps({"choice": choice}), ex=300)
     # Notify waiters via pub/sub
     await get_redis().publish(f"confirm_notify:{conversation_id}", request_id)
+
+
+# ── Clarify bridge (runner ↔ agent clarify_callback), protocol v2 ──
+# The agent RPUSHes its request onto a per-session LIST and BLPOPs the
+# per-clarify response LIST. BLPOP returns immediately even when the answer
+# was pushed *before* the agent started waiting — race-free by construction.
+
+
+def clarify_req_key(session_id: str) -> str:
+    return f"hermes:clarify:req:{session_id}"
+
+
+def clarify_resp_key(session_id: str, clarify_id: str) -> str:
+    return f"hermes:clarify:resp:{session_id}:{clarify_id}"
 
 
 # ── User presence (online/offline) ──
@@ -168,4 +239,7 @@ async def wait_for_control_response(conversation_id: str, timeout: float = 15.0)
             await asyncio.sleep(0.1)
         return {"error": "timeout"}
     finally:
-        await pubsub.unsubscribe(channel)
+        with _suppress(Exception):
+            await pubsub.unsubscribe(channel)
+        with _suppress(Exception):
+            await pubsub.aclose()

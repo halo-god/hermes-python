@@ -1,9 +1,11 @@
 """End-to-end conversation streaming test (P2).
 
 Runs the Agent Runner in-process (background task), drives the API via
-httpx ASGITransport, and collects streamed events off the Redis channel —
-proving: send → Redis Stream → ACP subprocess (mock) → Redis Pub/Sub →
-tokens + tool + produced file → persisted message + workspace file.
+httpx ASGITransport, and collects streamed events off the per-conversation
+Redis Stream — proving: send → Redis Stream → ACP subprocess (mock) →
+evt:conv:{id} stream → tokens + tool + produced file → persisted message +
+workspace file. Reading from id 0 also proves replay: no subscribe-before-
+publish ordering is required.
 
 Requires reachable PostgreSQL + Redis and a seeded admin.
 """
@@ -35,6 +37,23 @@ async def _services_ok() -> bool:
         return False
 
 
+async def collect_events(cid: str, timeout_s: float) -> list[dict]:
+    """Read events from the conversation stream (from the beginning) until 'done'."""
+    events: list[dict] = []
+    last_id = "0-0"
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
+        entries = await R.read_events(cid, last_id, block_ms=3000)
+        for entry_id, data in entries:
+            last_id = entry_id
+            ev = json.loads(data)
+            events.append(ev)
+            if ev.get("type") == "done":
+                return events
+    return events
+
+
 @pytest.mark.asyncio
 async def test_conversation_stream_e2e():
     if not await _services_ok():
@@ -64,12 +83,7 @@ async def test_conversation_stream_e2e():
             assert r.status_code == 201, r.text
             cid = r.json()["id"]
 
-            # subscribe to the live channel before sending
-            pubsub = R.get_redis().pubsub()
-            await pubsub.subscribe(R.conv_channel(cid))
-            await asyncio.sleep(0.3)
-
-            # send
+            # send — no need to subscribe first: the event stream replays
             r = await c.post(
                 f"{PREFIX}/conversations/{cid}/messages",
                 json={"text": "帮我写一个项目启动会的会议纪要"},
@@ -77,19 +91,7 @@ async def test_conversation_stream_e2e():
             )
             assert r.status_code == 200, r.text
 
-            # collect events
-            events = []
-            loop = asyncio.get_event_loop()
-            deadline = loop.time() + 25
-            while loop.time() < deadline:
-                m = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
-                if m:
-                    ev = json.loads(m["data"])
-                    events.append(ev)
-                    if ev.get("type") == "done":
-                        break
-            await pubsub.unsubscribe()
-            await pubsub.aclose()
+            events = await collect_events(cid, 25)
 
             types = [e["type"] for e in events]
             assert "token" in types, types

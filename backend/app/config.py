@@ -69,6 +69,34 @@ class Settings(BaseSettings):
     #   auto_first  = always auto-select first option
     #   disabled    = suppress clarify tool calls entirely (auto-resolve with first option)
     clarify_strategy: str = Field(default="smart")
+    # clarify protocol: dual | v2
+    #   v2   = LIST + BLPOP handshake only (race-free; requires updated agent callback)
+    #   dual = v2 plus legacy GET/pubsub keys for not-yet-updated agent deployments
+    clarify_protocol: str = Field(default="dual")
+    # How long the runner waits for the user to answer a clarify modal.
+    # Must stay well under acp_prompt_timeout so one clarify round can't kill the prompt.
+    clarify_timeout_seconds: int = 240
+    # session/prompt deadline for the ACP subprocess.
+    acp_prompt_timeout: int = 900
+    # Smart-strategy keyword lists (tunable per deployment without redeploy).
+    clarify_high_risk_keywords: list[str] = Field(default=[
+        "删除", "覆盖", "执行", "停止", "取消", "购买",
+        "remove", "delete", "execute", "run", "stop", "cancel",
+        "buy", "purchase", "overwrite", "drop", "truncate",
+        "rm -", "format", "destroy", "kill", "sudo",
+    ])
+    clarify_medium_risk_keywords: list[str] = Field(default=[
+        "生成", "创建", "修改", "配置", "部署", "写入", "安装",
+        "generate", "create", "modify", "configure", "deploy",
+        "write", "install", "update", "upgrade", "push", "commit",
+        "merge", "发布", "上线", "重启", "reboot", "restart",
+    ])
+    clarify_low_risk_patterns: list[str] = Field(default=[
+        "继续", "下一步", "确认", "好的", "开始", "是", "ok",
+        "yes", "proceed", "continue", "next", "confirm", "start",
+        "go ahead", "sure", "没问题", "可以", "确定",
+        "advance", "forward", "行", "中", "对", "嗯",
+    ])
 
     # ── Rate limiting ──
     rate_limit_per_min: int = 30  # per-user message sends / minute (default)
