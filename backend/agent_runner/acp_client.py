@@ -22,13 +22,17 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.config import settings
+
 logger = logging.getLogger("hermes.acp")
 
 # ── Timeouts (seconds) ──
 START_TIMEOUT = 30       # subprocess spawn
 INIT_TIMEOUT = 30        # initialize handshake
 SESSION_TIMEOUT = 30     # session/new
-PROMPT_TIMEOUT = 600     # session/prompt (complex tasks with clarify rounds need more time)
+# session/prompt deadline — must leave room for interactive clarify rounds
+# (each waits up to settings.clarify_timeout_seconds for the user).
+PROMPT_TIMEOUT = settings.acp_prompt_timeout
 CANCEL_TIMEOUT = 5       # session/cancel (fire-and-forget)
 
 OnUpdate = Callable[[dict], Awaitable[None]]

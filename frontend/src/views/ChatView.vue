@@ -858,7 +858,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                   <span class="rt-avatar" :style="{ background: profileDisplay(profileByAgentId(r.agent_id)).color }"><Icon :name="profileDisplay(profileByAgentId(r.agent_id)).icon" :size="11" /></span>
                   <span class="rt-name">{{ profileDisplay(profileByAgentId(r.agent_id)).label }}</span>
                   <span class="rt-stance">— {{ profileDisplay(profileByAgentId(r.agent_id)).description }}</span>
-                  <span class="rt-status" :class="r.status">{{ r.status === 'streaming' ? '生成中' : '完成' }}</span>
+                  <span class="rt-status" :class="r.status">{{ r.status === 'streaming' ? '生成中' : r.status === 'error' ? '作答失败' : r.status === 'timeout' ? '超时' : '完成' }}</span>
                 </div>
                 <div v-if="chat.messages[row.index].status === 'streaming'" class="rt-progress-wrap">
                   <div class="rt-progress-bar" :style="{ width: rtProgress(chat.messages[row.index].content.replies || [])[idx] + '%' }" :class="{ done: r.status === 'complete' }"></div>

@@ -142,7 +142,7 @@ export interface PlanEntry {
 export interface RoundtableReply {
   agent_id: string;
   text: string;
-  status: "streaming" | "complete";
+  status: "streaming" | "complete" | "error" | "timeout";
 }
 
 export interface RoundtableContent {
@@ -249,6 +249,16 @@ export interface ConfirmationRequest {
   questions?: Array<{ question: string; options: string[]; allow_free_text?: boolean }>;
 }
 
+// Clarify Q&A persisted in message content (audit trail + modal restore on reload)
+export interface ClarifyEntry {
+  id: string;
+  question: string;
+  options: string[];
+  status: "pending" | "answered" | "auto" | "timeout" | "cancelled";
+  choice?: string;
+  ts?: string;
+}
+
 export interface RtAgentMeta {
   agent_id: string;
   slot: number;
@@ -257,8 +267,10 @@ export interface RtAgentMeta {
   stance: string;
 }
 
-// Event frames from the agent runner (SSE single-agent + WS roundtable)
-export type StreamEvent =
+// Event frames from the agent runner (SSE single-agent + WS roundtable).
+// `conversation_id` is injected centrally by the backend so handlers can drop
+// events that belong to another conversation (switch-while-streaming).
+export type StreamEvent = (
   | { type: "start"; message_id: string }
   | { type: "token"; message_id: string; delta: string }
   | { type: "tool_call"; message_id: string; title?: string; status?: string }
@@ -267,15 +279,17 @@ export type StreamEvent =
   | { type: "error"; message_id: string; detail: string }
   | { type: "rt_start"; message_id: string; agents: RtAgentMeta[] }
   | { type: "rt_token"; message_id: string; slot: number; delta: string }
-  | { type: "rt_reply_done"; message_id: string; slot: number }
+  | { type: "rt_reply_done"; message_id: string; slot: number; status?: RoundtableReply["status"] }
   | { type: "merge_start"; message_id: string }
   | { type: "merge_token"; message_id: string; delta: string }
   | { type: "confirmation_request"; message_id: string; request: ConfirmationRequest }
   | { type: "confirmation_response"; message_id: string; request_id: string; choice: string }
+  | { type: "clarify_auto"; message_id: string; question: string; choice: string }
   | { type: "thought"; message_id: string; delta: string }
   | { type: "plan"; message_id: string; entries: PlanEntry[] }
   | { type: "usage"; message_id: string; input_tokens?: number; output_tokens?: number; context_size?: number; context_used?: number }
-  | { type: "session_info"; title?: string };
+  | { type: "session_info"; title?: string }
+) & { conversation_id?: string };
 
 // ── Teams / projects / tasks (P3 backend; frontend added here) ──
 export interface Team {

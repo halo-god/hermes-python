@@ -65,13 +65,15 @@ Auth: `Depends(get_current_user)` in `app/deps.py`. Admin routes use `_require_a
 
 ### Agent Runner — separate process
 
-`agent_runner/runner.py` consumes Redis Stream `acp:prompt`, drives ACP (JSON-RPC over stdio) sessions via `acp_client.py`, writes results to DB, and publishes streaming events to PubSub channel `chan:conv:{id}`. The API layer subscribes and forwards to clients via SSE (single-agent) or WebSocket (roundtable). Falls back to `mock_agent.py` if no agent CLI is on PATH.
+`agent_runner/runner.py` consumes Redis Stream `acp:prompt`, drives ACP (JSON-RPC over stdio) sessions via `acp_client.py`, writes results to DB, and appends streaming events to the capped per-conversation Redis Stream `evt:conv:{id}`. The API layer XREADs and forwards to clients via SSE (single-agent, `Last-Event-ID`/`since` replay on reconnect) or WebSocket (roundtable). Falls back to `mock_agent.py` if no agent CLI is on PATH.
 
 ### Redis key conventions
 | Key | Purpose |
 |-----|---------|
 | `acp:prompt` | Stream: API → runner (prompt tasks) |
-| `chan:conv:{id}` | PubSub: runner → API (streaming events) |
+| `evt:conv:{id}` | Stream: runner → API (streaming events; capped, replayable) |
+| `hermes:clarify:req:{sid}` | List: agent → runner clarify requests (RPUSH / LPOP) |
+| `hermes:clarify:resp:{sid}:{cid}` | List: runner → agent clarify answer (RPUSH / BLPOP) |
 | `rl:msg:{user}` | Rate-limit counter |
 | `acp:cancel:{conv}` | Cancellation signal |
 | `jwt:blacklist:{jti}` | Logout token invalidation |

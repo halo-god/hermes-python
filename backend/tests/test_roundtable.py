@@ -1,14 +1,13 @@
 """Roundtable multi-agent orchestration (P3).
 
 Runs the Agent Runner in-process, sets 3 active agents, dispatches a turn, and
-collects events off the Redis channel — proving parallel ACP replies (one per
-agent slot) + a Hermes-synthesized merge, all persisted on one roundtable
-message. (The WebSocket transport is a thin relay over this same channel.)
+collects events off the per-conversation Redis Stream — proving parallel ACP
+replies (one per agent slot) + a Hermes-synthesized merge, all persisted on
+one roundtable message. (The WebSocket transport relays this same stream.)
 """
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -19,6 +18,7 @@ from app.core import redis as R
 from app.db.base import async_session_maker
 from app.main import app
 from agent_runner.runner import Runner
+from tests.test_conversation_stream import collect_events
 
 PREFIX = settings.api_v1_prefix
 
@@ -63,26 +63,12 @@ async def test_roundtable_orchestration():
                             json={"agent_ids": ["hermes", "cowork", "critic"]}, headers=h)
             assert r.status_code == 200
 
-            pubsub = R.get_redis().pubsub()
-            await pubsub.subscribe(R.conv_channel(cid))
-            await asyncio.sleep(0.3)
-
             r = await c.post(f"{PREFIX}/conversations/{cid}/messages",
                              json={"text": "要不要做移动端 App？"}, headers=h)
             assert r.status_code == 200
             assert r.json()["agent_message"]["role"] == "roundtable"
 
-            events = []
-            loop = asyncio.get_event_loop()
-            deadline = loop.time() + 30
-            while loop.time() < deadline:
-                m = await pubsub.get_message(ignore_subscribe_messages=True, timeout=6.0)
-                if m:
-                    events.append(json.loads(m["data"]))
-                    if events[-1].get("type") == "done":
-                        break
-            await pubsub.unsubscribe()
-            await pubsub.aclose()
+            events = await collect_events(cid, 30)
 
             types = [e["type"] for e in events]
             assert "rt_start" in types

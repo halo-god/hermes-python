@@ -1,6 +1,6 @@
 """Agent Runner main loop — the ACP gateway.
 
-  Redis Stream `acp:prompt`  ──►  ACP subprocess (Hermes/mock)  ──►  Redis Pub/Sub `chan:conv:{id}`
+  Redis Stream `acp:prompt`  ──►  ACP subprocess (Hermes/mock)  ──►  Redis Stream `evt:conv:{id}`
 
 Performance: the per-token path is Redis-only (publish), never the DB. The
 agent message row is written once on completion.
@@ -392,9 +392,12 @@ class Runner:
             conversation_id, {"type": "rt_start", "message_id": message_id, "agents": slots}
         )
 
-        async def run_one(slot: int, aid: str) -> str:
+        async def run_one(slot: int, aid: str) -> tuple[str, str]:
+            """Run one roundtable reply. Returns (text, status) where status is
+            complete | timeout | error. Partial text is preserved on failure."""
             agent = self.agents.get(aid) or self.agents.get("hermes")
             buf = {"text": ""}
+            reply_status = "complete"
 
             async def on_update(update: dict) -> None:
                 if update.get("sessionUpdate") == "agent_message_chunk":
@@ -423,81 +426,105 @@ class Runner:
                 await client.prompt(text)
             except ACPTimeout as exc:
                 logger.error("roundtable timeout (%s): %s", aid, exc)
+                reply_status = "timeout"
                 buf["text"] = buf["text"] or f"（{aid} 超时未响应）"
             except Exception:  # noqa: BLE001
                 logger.exception("roundtable reply failed (%s)", aid)
+                reply_status = "error"
                 buf["text"] = buf["text"] or "（该助手作答失败）"
             finally:
                 await client.stop()
             await R.publish_event(
-                conversation_id, {"type": "rt_reply_done", "message_id": message_id, "slot": slot}
+                conversation_id,
+                {"type": "rt_reply_done", "message_id": message_id, "slot": slot, "status": reply_status},
             )
-            return buf["text"]
+            return buf["text"], reply_status
 
         results = await asyncio.gather(
             *[run_one(i, aid) for i, aid in enumerate(agent_ids)], return_exceptions=True
         )
-        texts = [r if isinstance(r, str) else "（作答失败）" for r in results]
+        texts = [r[0] if isinstance(r, tuple) else "（作答失败）" for r in results]
+        statuses = [r[1] if isinstance(r, tuple) else "error" for r in results]
 
         if await R.is_cancelled(conversation_id):
-            await self._finalize_roundtable(message_id, agent_ids, texts, "", "cancelled")
+            await self._finalize_roundtable(message_id, agent_ids, texts, statuses, "", "cancelled")
             await R.clear_cancel(conversation_id)
             await R.publish_event(conversation_id, {
                 "type": "done", "message_id": message_id, "status": "cancelled"
             })
             return
 
-        # ── merge via Hermes ──
+        # ── merge via Hermes — only over replies that actually succeeded ──
+        ok_slots = [i for i, s in enumerate(statuses) if s == "complete" and texts[i].strip()]
+        if not ok_slots:
+            await self._finalize_roundtable(message_id, agent_ids, texts, statuses, "", "error")
+            await R.clear_cancel(conversation_id)
+            await R.publish_event(conversation_id, {
+                "type": "error", "message_id": message_id, "detail": "所有助手均作答失败",
+            })
+            await R.publish_event(conversation_id, {
+                "type": "done", "message_id": message_id, "status": "error"
+            })
+            return
+
         await R.publish_event(conversation_id, {"type": "merge_start", "message_id": message_id})
-        merge_prompt = "请综合以下各助手的观点，给出一致结论与下一步：\n\n" + "\n\n".join(
-            f"【{agent_ids[i]}】{texts[i]}" for i in range(len(agent_ids))
-        )
-        hermes = self.agents.get("hermes") or self.agents.get(agent_ids[0])
         merged = {"text": ""}
+        if len(ok_slots) == 1:
+            # A merge of one voice is that voice — skip the extra ACP round.
+            merged["text"] = texts[ok_slots[0]]
+            await R.publish_event(conversation_id, {
+                "type": "merge_token", "message_id": message_id, "delta": merged["text"]
+            })
+        else:
+            merge_prompt = "请综合以下各助手的观点，给出一致结论与下一步：\n\n" + "\n\n".join(
+                f"【{agent_ids[i]}】{texts[i]}" for i in ok_slots
+            )
+            hermes = self.agents.get("hermes") or self.agents.get(agent_ids[0])
 
-        async def on_merge(update: dict) -> None:
-            if update.get("sessionUpdate") == "agent_message_chunk":
-                d = (update.get("content") or {}).get("text", "")
-                if d:
-                    merged["text"] += d
-                    await R.publish_event(conversation_id, {
-                        "type": "merge_token", "message_id": message_id, "delta": d
-                    })
+            async def on_merge(update: dict) -> None:
+                if update.get("sessionUpdate") == "agent_message_chunk":
+                    d = (update.get("content") or {}).get("text", "")
+                    if d:
+                        merged["text"] += d
+                        await R.publish_event(conversation_id, {
+                            "type": "merge_token", "message_id": message_id, "delta": d
+                        })
 
-        async def _noop(_p: str, _c: str) -> None:
-            return None
+            async def _noop(_p: str, _c: str) -> None:
+                return None
 
-        mclient = ACPClient(
-            hermes.command, cwd, protocol_version=settings.acp_protocol_version,
-            on_update=on_merge, on_fs_write=_noop,
-        )
-        try:
-            await mclient.start()
-            await mclient.initialize()
-            await mclient.new_session(cwd)
-            await mclient.prompt(merge_prompt)
-        except ACPTimeout:
-            logger.error("roundtable merge timed out")
-        except Exception:  # noqa: BLE001
-            logger.exception("roundtable merge failed")
-        finally:
-            await mclient.stop()
+            mclient = ACPClient(
+                hermes.command, cwd, protocol_version=settings.acp_protocol_version,
+                on_update=on_merge, on_fs_write=_noop,
+            )
+            try:
+                await mclient.start()
+                await mclient.initialize()
+                await mclient.new_session(cwd)
+                await mclient.prompt(merge_prompt)
+            except ACPTimeout:
+                logger.error("roundtable merge timed out")
+            except Exception:  # noqa: BLE001
+                logger.exception("roundtable merge failed")
+            finally:
+                await mclient.stop()
 
-        await self._finalize_roundtable(message_id, agent_ids, texts, merged["text"], "complete")
+        await self._finalize_roundtable(message_id, agent_ids, texts, statuses, merged["text"], "complete")
         await R.clear_cancel(conversation_id)
         await R.publish_event(
             conversation_id, {"type": "done", "message_id": message_id, "status": "complete"}
         )
 
     async def _finalize_roundtable(
-        self, message_id: str, agent_ids: list[str], texts: list[str], merged: str, status: str
+        self, message_id: str, agent_ids: list[str], texts: list[str],
+        statuses: list[str], merged: str, status: str,
     ) -> None:
         async with async_session_maker() as db:
             msg = await db.get(Message, uuid.UUID(message_id))
             if msg:
                 msg.content = {
                     "replies": [
-                        {"agent_id": agent_ids[i], "text": texts[i], "status": "complete"}
+                        {"agent_id": agent_ids[i], "text": texts[i], "status": statuses[i]}
                         for i in range(len(agent_ids))
                     ],
                     "merged": {"text": merged, "status": status},
@@ -552,6 +579,8 @@ class Runner:
                 acc["tool_since_split"] = True
                 step = {"title": update.get("title"), "status": update.get("status")}
                 steps.append(step)
+                # NOTE: clarify is detected solely via the request LIST poll in the
+                # prompt loop (atomic LPOP) — title matching here double-fired.
                 await R.publish_event(
                     conversation_id,
                     {
@@ -561,11 +590,6 @@ class Runner:
                         "status": step["status"],
                     },
                 )
-                # Check if agent called clarify tool — read pending request from Redis
-                if "clarify" in (step.get("title") or "").lower():
-                    await self._handle_clarify_tool_call(
-                        conversation_id, acc["current_msg_id"], acc
-                    )
             elif kind == "agent_thought":
                 delta = (update.get("content") or {}).get("text", "") or update.get("delta", "")
                 if delta:
@@ -639,7 +663,10 @@ class Runner:
                 logger.info("Native confirmation_request, sent SSE: %s", request_id)
                 # Wait for user response in background, then inject result into agent
                 t = asyncio.create_task(
-                    self._wait_and_unblock_clarify(conversation_id, request_id)
+                    self._wait_and_unblock_clarify(
+                        conversation_id, request_id, sid=conversation_id,
+                        message_id=acc["current_msg_id"], acc=acc,
+                    )
                 )
                 self._bg_tasks.add(t)
                 t.add_done_callback(self._bg_tasks.discard)
@@ -717,8 +744,10 @@ class Runner:
             # The agent's clarify_callback blocks the agent thread while waiting
             # for user response. Since it can't send on_update events while
             # blocked, we must poll Redis for pending clarify requests.
-            # NOTE: agent uses ACP session_id as key, not conversation_id
-            clarify_session_id = new_session or conversation_id
+            # NOTE: agent keys clarify requests by ACP session_id — on a resumed
+            # session new_session is None, so fall back to the stored session id
+            # (using conversation_id there made the keys never match).
+            clarify_session_id = new_session or acp_session_id or conversation_id
             # Prepend system_prompt on the first message of a new session,
             # or when system_prompt is provided (profile switch)
             effective_text = text
@@ -743,17 +772,18 @@ class Runner:
                     await asyncio.wait_for(asyncio.shield(prompt_task), timeout=1.0)
                 except asyncio.TimeoutError:
                     pass
-                # Poll Redis for pending clarify requests (agent uses session_id)
-                pending_key = f"hermes:clarify_pending:{clarify_session_id}"
+                # Atomically pop pending clarify requests (agent keys by session_id).
+                # LPOP consumes each request exactly once — no double-trigger, and
+                # queued requests survive until we get to them (no overwrite).
                 try:
-                    val = await R.get_redis().get(pending_key)
-                    if val:
-                        await self._handle_clarify_tool_call(
+                    data = await self._pop_clarify_request(clarify_session_id)
+                    if data:
+                        await self._handle_clarify_request(
                             conversation_id, acc["current_msg_id"], acc,
-                            clarify_session_id=clarify_session_id,
+                            clarify_session_id, data,
                         )
                 except Exception:
-                    pass
+                    logger.debug("clarify poll failed", exc_info=True)
             stop_reason = prompt_task.result()
         except ACPTimeout as exc:
             logger.error("prompt timed out for %s: %s", conversation_id, exc)
@@ -773,95 +803,15 @@ class Runner:
                 conversation_id, acc["current_msg_id"], agent_id, acc["text"]
             )
 
-        # Clarify tool calls are handled during the prompt via _handle_clarify_tool_call background task.
-        # Fallback: if model output contains [确认]...[/确认] text markers (didn't call clarify tool),
-        # extract and show confirmation modal anyway.
-        if not acc.get("_clarify_handled") and status == "complete" and acc["text"]:
-            import re as _re
-            m = _re.search(r'\[确认\](.+?)\[/确认\]', acc["text"], _re.DOTALL)
-            if m:
-                content = m.group(1).strip()
-                parts = [p.strip() for p in content.split('|') if p.strip()]
-                if parts:
-                    question = parts[0]
-                    options = parts[1:] if len(parts) > 1 else ["继续", "跳过"]
-                    request_id = str(uuid.uuid4())
-                    req_payload = {
-                        "id": request_id,
-                        "conversation_id": conversation_id,
-                        "message_id": acc["current_msg_id"],
-                        "question": question,
-                        "questions": [{"question": question, "options": options, "allow_free_text": True}],
-                        "options": options,
-                    }
-                    # Strip marker from displayed text
-                    acc["text"] = _re.sub(r'\[确认\].+?\[/确认\]', '', acc["text"]).strip()
-                    await R.publish_event(
-                        conversation_id,
-                        {"type": "confirmation_request", "message_id": acc["current_msg_id"], "request": req_payload},
-                    )
-                    logger.info("Regex fallback: [确认] marker detected, sent confirmation: %s", request_id[:8])
-                    # Wait for user response
-                    try:
-                        resp = await R.wait_for_confirmation(conversation_id, request_id, timeout=300)
-                        choice = resp.get("choice", "超时")
-                        logger.info("Regex fallback confirmation response: %s", choice)
-                        await R.publish_event(
-                            conversation_id,
-                            {"type": "confirmation_response", "request_id": request_id, "choice": choice},
-                        )
-                        if choice and choice not in ("跳过", "超时"):
-                            try:
-                                acc["text"] = ""
-                                acc["steps"] = []
-                                stop_reason = await client.prompt(f"[用户选择了] {choice}")
-                                # Loop: keep detecting [确认] markers in follow-up responses
-                                import re as _re2
-                                for _loop in range(5):  # max 5 rounds
-                                    if not acc["text"]:
-                                        break
-                                    m2 = _re2.search(r'\[确认\](.+?)\[/确认\]', acc["text"], _re2.DOTALL)
-                                    if not m2:
-                                        break
-                                    content2 = m2.group(1).strip()
-                                    parts2 = [p.strip() for p in content2.split('|') if p.strip()]
-                                    if not parts2:
-                                        break
-                                    question2 = parts2[0]
-                                    options2 = parts2[1:] if len(parts2) > 1 else ["继续", "跳过"]
-                                    req_id2 = str(uuid.uuid4())
-                                    acc["text"] = _re2.sub(r'\[确认\].+?\[/确认\]', '', acc["text"]).strip()
-                                    await R.publish_event(
-                                        conversation_id,
-                                        {"type": "confirmation_request", "message_id": acc["current_msg_id"],
-                                         "request": {"id": req_id2, "conversation_id": conversation_id,
-                                                     "message_id": acc["current_msg_id"], "question": question2,
-                                                     "questions": [{"question": question2, "options": options2, "allow_free_text": True}],
-                                                     "options": options2}},
-                                    )
-                                    logger.info("Loop %d: [确认] marker detected: %s", _loop+1, req_id2[:8])
-                                    resp2 = await R.wait_for_confirmation(conversation_id, req_id2, timeout=300)
-                                    choice2 = resp2.get("choice", "超时")
-                                    logger.info("Loop %d response: %s", _loop+1, choice2)
-                                    await R.publish_event(
-                                        conversation_id,
-                                        {"type": "confirmation_response", "request_id": req_id2, "choice": choice2},
-                                    )
-                                    if not choice2 or choice2 in ("跳过", "超时"):
-                                        break
-                                    acc["text"] = ""
-                                    acc["steps"] = []
-                                    stop_reason = await client.prompt(f"[用户选择了] {choice2}")
-                                if acc["text"]:
-                                    await self._extract_and_save_files(
-                                        conversation_id, acc["current_msg_id"], agent_id, acc["text"]
-                                    )
-                            except Exception as exc:
-                                logger.warning("Follow-up prompt failed: %s", exc)
-                    except Exception:
-                        logger.warning("Regex fallback confirmation timed out")
-
-        await self._finalize(acc["current_msg_id"], acc["text"], status, steps, acc.get("thinking") or "", acc.get("plan"), acc.get("files"))
+        # Clarify requests are consumed during the prompt loop (LPOP + modal).
+        # The legacy [确认]...[/确认] text-marker fallback was removed: it
+        # contradicted the prompt rules ("禁止输出 [确认] 标记") and markers can
+        # be split across streamed chunks — the tool-call path is the only one.
+        await self._finalize(
+            acc["current_msg_id"], acc["text"], status, steps,
+            acc.get("thinking") or "", acc.get("plan"), acc.get("files"),
+            acc.get("clarifies"),
+        )
         await R.clear_cancel(conversation_id)
         await R.publish_event(
             conversation_id,
@@ -874,47 +824,66 @@ class Runner:
             },
         )
 
-    # ── Clarify strategy helpers ──
+    # ── Clarify (protocol v2: LIST + BLPOP, race-free) ──
+    #
+    # agent RPUSH `hermes:clarify:req:{sid}`  →  runner LPOP (prompt loop)
+    # runner RPUSH `hermes:clarify:resp:{sid}:{clarify_id}`  →  agent BLPOP
+    #
+    # BLPOP returns even when the response was pushed before the agent started
+    # waiting, so auto-resolve can never strand the agent. With
+    # settings.clarify_protocol == "dual" the legacy GET/pubsub keys are also
+    # consumed/written for agent deployments that haven't been re-patched yet.
+
+    async def _pop_clarify_request(self, sid: str) -> dict | None:
+        """Atomically consume one pending clarify request, if any."""
+        r = R.get_redis()
+        val = await r.lpop(R.clarify_req_key(sid))
+        if val is None and settings.clarify_protocol == "dual":
+            val = await r.getdel(f"hermes:clarify_pending:{sid}")
+        if not val:
+            return None
+        try:
+            return json.loads(val)
+        except (TypeError, ValueError):
+            logger.warning("Malformed clarify request for sid=%s: %r", sid[:8], val)
+            return None
+
+    async def _deliver_clarify_response(self, sid: str, clarify_id: str, choice: str) -> bool:
+        """Unblock the agent's clarify_callback with the chosen answer."""
+        try:
+            r = R.get_redis()
+            resp_key = R.clarify_resp_key(sid, clarify_id)
+            pipe = r.pipeline()
+            pipe.rpush(resp_key, choice)
+            pipe.expire(resp_key, 60)
+            if settings.clarify_protocol == "dual":
+                pipe.set(f"hermes:clarify_response:{sid}:{clarify_id}", choice, ex=60)
+                pipe.publish(f"hermes:clarify_notify:{sid}", clarify_id)
+            await pipe.execute()
+            return True
+        except Exception:
+            logger.exception("Failed to deliver clarify response sid=%s id=%s", sid[:8], clarify_id[:8])
+            return False
 
     def _classify_clarify_risk(self, question: str, options: list[str]) -> str:
-        """Risk classification for clarify questions.
+        """Keyword risk classification for clarify questions: low | medium | high.
 
-        Returns one of: "low" | "medium" | "high"
+        Keyword lists live in settings (clarify_*_keywords) so deployments can
+        tune them. Misclassification is safe: medium/high only means "show the
+        modal", and the failure mode of auto-resolve is also "show the modal".
         """
         q_lower = question.lower()
         opts_lower = [opt.lower() for opt in options]
         combined = f"{q_lower} {' '.join(opts_lower)}"
 
-        # High risk: destructive or irreversible operations
-        high_risk = [
-            "删除", "覆盖", "执行", "停止", "取消", "购买",
-            "remove", "delete", "execute", "run", "stop", "cancel",
-            "buy", "purchase", "overwrite", "drop", "truncate",
-            "rm -", "format", "destroy", "kill", "sudo",
-        ]
-        for kw in high_risk:
-            if kw in combined:
+        for kw in settings.clarify_high_risk_keywords:
+            if kw.lower() in combined:
                 return "high"
-
-        # Medium risk: state-changing but non-destructive
-        medium_risk = [
-            "生成", "创建", "修改", "配置", "部署", "写入", "安装",
-            "generate", "create", "modify", "configure", "deploy",
-            "write", "install", "update", "upgrade", "push", "commit",
-            "merge", "发布", "上线", "重启", "reboot", "restart",
-        ]
-        for kw in medium_risk:
-            if kw in combined:
+        for kw in settings.clarify_medium_risk_keywords:
+            if kw.lower() in combined:
                 return "medium"
-
-        # Low risk: confirmation-type or informational
-        low_patterns = [
-            "继续", "下一步", "确认", "好的", "开始", "是", "ok",
-            "yes", "proceed", "continue", "next", "confirm", "start",
-            "go ahead", "sure", "没问题", "可以", "确定",
-            "advance", "forward", "行", "中", "对", "嗯",
-        ]
-        for p in low_patterns:
+        for p in settings.clarify_low_risk_patterns:
+            p = p.lower()
             if p in q_lower or any(p in opt for opt in opts_lower):
                 return "low"
 
@@ -926,170 +895,129 @@ class Runner:
 
         return "medium"
 
-    async def _auto_resolve_clarify(
-        self, sid: str, pending_key: str, choice: str | None = None
-    ) -> bool:
-        """Auto-resolve a clarify request without user interaction.
-
-        Reads the pending request, writes the chosen option back to Redis,
-        and publishes the notify event to unblock the agent thread.
-
-        Returns True if successfully resolved.
-        """
-        import json as _json
-
-        val = await R.get_redis().get(pending_key)
-        if not val:
-            return False
-
-        try:
-            data = _json.loads(val)
-            options = data.get("options") or ["继续", "跳过"]
-            resolved = choice if choice is not None else (options[0] if options else "继续")
-            clarify_id = data.get("clarify_id", "")
-
-            response_key = f"hermes:clarify_response:{sid}:{clarify_id}"
-            notify_channel = f"hermes:clarify_notify:{sid}"
-
-            pipe = R.get_redis().pipeline()
-            pipe.delete(pending_key)
-            pipe.set(response_key, resolved, ex=60)
-            pipe.publish(notify_channel, clarify_id)
-            await pipe.execute()
-
-            logger.info(
-                "Auto-resolved clarify for sid=%s strategy=%s choice=%s",
-                sid[:8], settings.clarify_strategy, resolved,
-            )
-            return True
-        except Exception:
-            logger.exception("Failed to auto-resolve clarify for sid=%s", sid[:8])
-            return False
-
-    async def _handle_clarify_tool_call(
-        self, conversation_id: str, message_id: str, acc: dict,
-        clarify_session_id: str | None = None,
+    async def _handle_clarify_request(
+        self, conversation_id: str, message_id: str, acc: dict, sid: str, data: dict
     ) -> None:
-        """Handle agent's clarify tool call with configurable strategy.
+        """Route one popped clarify request per the configured strategy.
 
         Strategies:
           - disabled / auto_first : auto-resolve immediately (no UI)
           - smart                 : risk-based (low=auto, medium/high=modal)
-          - interactive           : always pop confirmation modal (legacy)
+          - interactive           : always pop confirmation modal
+        Auto-resolve failures fall back to the modal — never strand the agent.
         """
-        import json as _json
-
-        sid = clarify_session_id or conversation_id
-        pending_key = f"hermes:clarify_pending:{sid}"
         strategy = (settings.clarify_strategy or "smart").strip().lower()
+        clarify_id = data.get("clarify_id") or uuid.uuid4().hex[:12]
+        question = data.get("question") or "需要确认"
+        options = data.get("options") or ["继续", "跳过"]
 
-        # ── Fast path: fully automatic strategies ──
-        if strategy in ("disabled", "auto_first"):
-            if await self._auto_resolve_clarify(sid, pending_key):
-                acc["_clarify_handled"] = True
-            return
+        auto = strategy in ("disabled", "auto_first") or (
+            strategy == "smart" and self._classify_clarify_risk(question, options) == "low"
+        )
+        if auto:
+            choice = options[0] if options else "继续"
+            if await self._deliver_clarify_response(sid, clarify_id, choice):
+                logger.info(
+                    "Auto-resolved clarify sid=%s strategy=%s choice=%s",
+                    sid[:8], strategy, choice,
+                )
+                await self._record_clarify(message_id, acc, {
+                    "id": clarify_id, "question": question, "options": options,
+                    "status": "auto", "choice": choice,
+                    "ts": datetime.now(tz=timezone.utc).isoformat(),
+                })
+                await R.publish_event(conversation_id, {
+                    "type": "clarify_auto", "message_id": message_id,
+                    "question": question, "choice": choice,
+                })
+                return
+            logger.warning("Auto-resolve delivery failed, falling back to modal (sid=%s)", sid[:8])
 
-        # ── Retry read: agent writes pending_key right before blocking ──
-        val = None
-        for _ in range(8):  # 8 × 100ms = 800ms window
-            val = await R.get_redis().get(pending_key)
-            if val:
-                break
-            await asyncio.sleep(0.1)
+        # ── Interactive modal (interactive, smart medium/high, or auto fallback) ──
+        await self._record_clarify(message_id, acc, {
+            "id": clarify_id, "question": question, "options": options,
+            "status": "pending", "ts": datetime.now(tz=timezone.utc).isoformat(),
+        })
+        req_payload = {
+            "id": clarify_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "question": question,
+            "questions": [{"question": question, "options": options, "allow_free_text": True}],
+            "options": options,
+        }
+        await R.publish_event(
+            conversation_id,
+            {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
+        )
+        logger.info("Clarify request, sent confirmation_request: %s (sid=%s)", clarify_id, sid[:8])
 
-        if not val:
-            logger.warning("No pending clarify request found for sid=%s after retries", sid[:8])
-            return
-
-        try:
-            data = _json.loads(val)
-            clarify_id = data.get("clarify_id", str(uuid.uuid4()))
-            question = data.get("question", "需要确认")
-            options = data.get("options") or ["继续", "跳过"]
-
-            # ── Smart strategy: risk-based routing ──
-            if strategy == "smart":
-                risk = self._classify_clarify_risk(question, options)
-                if risk == "low":
-                    await R.get_redis().delete(pending_key)
-                    response_key = f"hermes:clarify_response:{sid}:{clarify_id}"
-                    notify_channel = f"hermes:clarify_notify:{sid}"
-                    r = R.get_redis()
-                    await r.set(response_key, options[0] if options else "继续", ex=60)
-                    await r.publish(notify_channel, clarify_id)
-                    logger.info(
-                        "Smart clarify: LOW risk, auto-resolved for sid=%s (choice=%s)",
-                        sid[:8], options[0] if options else "继续",
-                    )
-                    acc["_clarify_handled"] = True
-                    return
-                # medium / high fall through to interactive modal
-
-            # ── Interactive modal (legacy, or smart medium/high) ──
-            await R.get_redis().delete(pending_key)
-            req_payload = {
-                "id": clarify_id,
-                "conversation_id": conversation_id,
-                "message_id": message_id,
-                "question": question,
-                "questions": [{"question": question, "options": options, "allow_free_text": True}],
-                "options": options or ["继续", "跳过"],
-            }
-            await R.publish_event(
-                conversation_id,
-                {"type": "confirmation_request", "message_id": message_id, "request": req_payload},
+        t = asyncio.create_task(
+            self._wait_and_unblock_clarify(
+                conversation_id, clarify_id, sid=sid, message_id=message_id, acc=acc
             )
-            logger.info("Clarify tool detected, sent confirmation_request: %s (sid=%s)", clarify_id, sid[:8])
-            acc["_clarify_handled"] = True
-
-            # Start background task to wait for user response and unblock agent
-            t = asyncio.create_task(
-                self._wait_and_unblock_clarify(conversation_id, clarify_id, clarify_session_id=sid)
-            )
-            self._bg_tasks.add(t)
-            t.add_done_callback(self._bg_tasks.discard)
-        except Exception:
-            logger.exception("Failed to handle clarify tool call for sid=%s", sid[:8])
+        )
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
 
     async def _wait_and_unblock_clarify(
-        self, conversation_id: str, clarify_id: str,
-        clarify_session_id: str | None = None,
+        self, conversation_id: str, clarify_id: str, *,
+        sid: str, message_id: str | None = None, acc: dict | None = None,
     ) -> None:
-        """Wait for user response via runner's confirm pub/sub, then write back
-        to clarify_callback's Redis keys to unblock the agent thread."""
-        import json as _json
-
-        # Agent uses ACP session_id for Redis keys
-        sid = clarify_session_id or conversation_id
-        response_key = f"hermes:clarify_response:{sid}:{clarify_id}"
-        notify_channel = f"hermes:clarify_notify:{sid}"
+        """Wait for the user's modal answer (or cancel/timeout), then unblock
+        the agent's clarify_callback and persist the outcome."""
+        try:
+            resp = await R.wait_for_confirmation(
+                conversation_id, clarify_id,
+                timeout=settings.clarify_timeout_seconds, cancel_check=True,
+            )
+            choice = resp.get("choice", "超时")
+        except Exception:
+            logger.warning("Clarify wait failed for %s", clarify_id[:8], exc_info=True)
+            choice = "超时"
+        logger.info("Clarify response for %s: %s", clarify_id[:8], choice)
 
         try:
-            # Wait for user response via runner's confirmation mechanism
-            resp = await R.wait_for_confirmation(conversation_id, clarify_id, timeout=300)
-            choice = resp.get("choice", "超时")
-            logger.info("Clarify response for %s: %s", clarify_id[:8], choice)
-
-            # Notify frontend
             await R.publish_event(
                 conversation_id,
                 {"type": "confirmation_response", "request_id": clarify_id, "choice": choice},
             )
-
-            # Write back to clarify_callback's Redis keys to unblock agent thread
-            r = R.get_redis()
-            await r.set(response_key, choice, ex=60)
-            await r.publish(notify_channel, clarify_id)
-            logger.info("Unblocked clarify_callback for %s", clarify_id[:8])
         except Exception:
-            logger.warning("Clarify wait failed for %s", clarify_id[:8], exc_info=True)
-            # Write timeout to unblock agent
-            try:
-                r = R.get_redis()
-                await r.set(response_key, "超时", ex=60)
-                await r.publish(notify_channel, clarify_id)
-            except Exception:
-                pass
+            logger.warning("Failed to publish confirmation_response", exc_info=True)
+
+        if not await self._deliver_clarify_response(sid, clarify_id, choice):
+            await asyncio.sleep(0.5)
+            await self._deliver_clarify_response(sid, clarify_id, choice)
+
+        if message_id and acc is not None:
+            status = {"已取消": "cancelled", "超时": "timeout"}.get(choice, "answered")
+            await self._update_clarify(message_id, acc, clarify_id, status, choice)
+
+    # ── Clarify persistence: Q&A lives in message.content["clarifies"] so a
+    # page refresh can restore the pending modal and history keeps the audit. ──
+
+    async def _record_clarify(self, message_id: str, acc: dict, entry: dict) -> None:
+        acc.setdefault("clarifies", []).append(entry)
+        await self._write_clarifies(message_id, acc["clarifies"])
+
+    async def _update_clarify(
+        self, message_id: str, acc: dict, clarify_id: str, status: str, choice: str
+    ) -> None:
+        for e in acc.get("clarifies", []):
+            if e.get("id") == clarify_id:
+                e["status"] = status
+                e["choice"] = choice
+        await self._write_clarifies(message_id, acc.get("clarifies", []))
+
+    async def _write_clarifies(self, message_id: str, clarifies: list[dict]) -> None:
+        try:
+            async with async_session_maker() as db:
+                msg = await db.get(Message, uuid.UUID(message_id))
+                if msg:
+                    msg.content = {**(msg.content or {}), "clarifies": clarifies}
+                    await db.commit()
+        except Exception:
+            logger.warning("Failed to persist clarifies for %s", message_id[:8], exc_info=True)
 
     # ── Fallback: extract files from AI text response ──
     async def _extract_and_save_files(
@@ -1105,10 +1033,6 @@ class Runner:
         Files from PREVIOUS messages are still updated (creates version history).
         """
         import re
-
-        from sqlalchemy import select
-
-        from app.db.models.workspace import WorkspaceFile
 
         cid = uuid.UUID(conversation_id)
 
@@ -1199,7 +1123,7 @@ class Runner:
     async def _finalize(
         self, message_id: str, text: str, status: str, steps: list[dict] | None = None,
         thinking: str | None = None, plan: list[dict] | None = None,
-        files: list[dict] | None = None,
+        files: list[dict] | None = None, clarifies: list[dict] | None = None,
     ) -> None:
         async with async_session_maker() as db:
             msg = await db.get(Message, uuid.UUID(message_id))
@@ -1213,6 +1137,8 @@ class Runner:
                     content["plan"] = plan
                 if files:
                     content["files"] = files
+                if clarifies:
+                    content["clarifies"] = clarifies
                 msg.content = content
                 msg.status = status
                 # touch the conversation's updated_at

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 
 from fastapi import (
@@ -314,49 +315,52 @@ async def cancel(
     return {"status": "cancelling"}
 
 
+_STREAM_ID_RE = re.compile(r"^\d+(-\d+)?$")
+
+
 @router.get("/{conversation_id}/stream")
 async def stream(
     conversation_id: uuid.UUID,
     request: Request,
     access_token: str = Query(..., description="access token (EventSource cannot set headers)"),
+    since: str | None = Query(None, description="resume after this stream id (e.g. '1700000000000-0')"),
     db: AsyncSession = Depends(get_db),
 ):
     """SSE live stream of agent events for a conversation.
 
-    Performance: pure Redis Pub/Sub fan-out, no DB on the per-event path,
-    each event flushed immediately. EventSource auto-reconnects on drop.
+    Events live in a capped per-conversation Redis Stream, so unlike Pub/Sub
+    there is no subscribe-after-publish loss, and reconnects replay: each SSE
+    frame carries the stream entry as its `id`, EventSource resends it as the
+    Last-Event-ID header on auto-reconnect (the `since` param covers manual
+    resume). No DB on the per-event path.
     """
     user = await user_from_access_token(access_token, db)
     convo = await svc.get_conversation(db, conversation_id, user.id)
     if convo is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    channel = redis_core.conv_channel(str(conversation_id))
+    cid = str(conversation_id)
+    resume_id = request.headers.get("last-event-id") or since
+    if resume_id and not _STREAM_ID_RE.match(resume_id):
+        resume_id = None
 
     async def event_gen():
-        pubsub = redis_core.get_redis().pubsub()
-        await pubsub.subscribe(channel)
-        try:
-            yield ": connected\n\n"  # prelude opens the stream promptly
-            while True:
-                if await request.is_disconnected():
-                    break
-                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0)
-                if msg is None:
-                    yield ": keepalive\n\n"  # heartbeat
-                    continue
-                data = msg["data"]
-                yield f"data: {data}\n\n"
-                # NOTE: We no longer close the stream on "done".
-                # The frontend owns the lifecycle: it calls closeStream() ~500ms after
-                # receiving "done" (unless a follow-up "start" cancels the timer).
-                # Closing here breaks the clarify-resume flow: after a tool split the
-                # runner emits "done" then immediately "start" + tokens, but the
-                # old "done"-closes-stream logic dropped the follow-up events because
-                # EventSource does NOT auto-reconnect on a clean server close.
-        finally:
-            await pubsub.unsubscribe(channel)
-            await pubsub.aclose()
+        # Capture the position BEFORE the prelude: anything published after this
+        # point is delivered, anything before is the caller's chosen resume point.
+        last_id = resume_id or await redis_core.latest_event_id(cid)
+        yield ": connected\n\n"  # prelude opens the stream promptly
+        while True:
+            if await request.is_disconnected():
+                break
+            entries = await redis_core.read_events(cid, last_id)
+            if not entries:
+                yield ": keepalive\n\n"  # heartbeat
+                continue
+            for entry_id, data in entries:
+                last_id = entry_id
+                yield f"id: {entry_id}\ndata: {data}\n\n"
+            # NOTE: the stream never closes on "done" — the frontend owns the
+            # lifecycle (clarify-resume emits done → start on the same stream).
 
     return StreamingResponse(
         event_gen(),
@@ -384,20 +388,28 @@ async def conversation_ws(
     except HTTPException:
         await websocket.close(code=4401)
         return
-    convo = await svc.get_conversation(db, conversation_id, user.id)
+    # Capture the id now: the request-scoped `db` session is long gone by the
+    # time later frames arrive, and touching the detached ORM user then would
+    # raise MissingGreenlet/DetachedInstanceError.
+    user_id = user.id
+    convo = await svc.get_conversation(db, conversation_id, user_id)
     if convo is None:
         await websocket.close(code=4404)
         return
 
+    cid = str(conversation_id)
+    # Capture the stream position before accept(): nothing the client triggers
+    # after the handshake can be published before this point — zero loss.
+    last_id = await redis_core.latest_event_id(cid)
     await websocket.accept()
-    channel = redis_core.conv_channel(str(conversation_id))
-    pubsub = redis_core.get_redis().pubsub()
-    await pubsub.subscribe(channel)
 
     async def pump_out():
-        async for msg in pubsub.listen():
-            if msg.get("type") == "message":
-                await websocket.send_text(msg["data"])
+        nonlocal last_id
+        while True:
+            entries = await redis_core.read_events(cid, last_id)
+            for entry_id, data in entries:
+                last_id = entry_id
+                await websocket.send_text(data)
 
     out_task = asyncio.create_task(pump_out())
     try:
@@ -411,7 +423,7 @@ async def conversation_ws(
             if action == "send":
                 text = (payload.get("text") or "").strip()
                 if text:
-                    if not await ratelimit.allow_send(str(user.id)):
+                    if not await ratelimit.allow_send(str(user_id)):
                         await websocket.send_text(
                             json.dumps({"type": "error", "message_id": "", "detail": "发送过于频繁"})
                         )
@@ -419,17 +431,15 @@ async def conversation_ws(
                     file_ids = payload.get("attached_file_ids") or []
                     p_id = payload.get("profileId") or payload.get("profile_id") or None
                     async with async_session_maker() as db2:
-                        c = await svc.get_conversation(db2, conversation_id, user.id)
+                        c = await svc.get_conversation(db2, conversation_id, user_id)
                         if c:
-                            await svc.dispatch(db2, c, text, attached_file_ids=file_ids, owner_id=user.id, profile_id_override=p_id)
+                            await svc.dispatch(db2, c, text, attached_file_ids=file_ids, owner_id=user_id, profile_id_override=p_id)
             elif action == "cancel":
-                await redis_core.request_cancel(str(conversation_id))
+                await redis_core.request_cancel(cid)
     except WebSocketDisconnect:
         pass
     finally:
         out_task.cancel()
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()
 
 
 @router.get("/{conversation_id}/files", response_model=list[WorkspaceFileOut])

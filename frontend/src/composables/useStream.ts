@@ -73,32 +73,38 @@ export function useStream() {
   }
 
   /** Open an SSE connection and return a promise that resolves when connected. */
-  function openSSE(url: string, timeoutMs = 600): Promise<void> {
+  function openSSE(url: string, timeoutMs = 3000): Promise<void> {
     close();
     error.value = null;
     es = new EventSource(url);
+    let consecutiveErrors = 0;
 
     es.onmessage = (e) => {
+      consecutiveErrors = 0;
       try {
         emit(JSON.parse(e.data) as StreamEvent);
       } catch { /* heartbeat / non-JSON */ }
     };
 
     es.onerror = () => {
-      error.value = "SSE 连接断开";
-      close();
+      // Let EventSource auto-reconnect (it resends Last-Event-ID, and the
+      // server replays missed events). Closing here used to kill the stream
+      // on the first transient drop. Only give up after repeated failures.
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= 5) {
+        error.value = "SSE 连接断开";
+        close();
+      }
     };
 
     return new Promise<void>((resolve) => {
       es!.onopen = () => {
         connected.value = true;
+        consecutiveErrors = 0;
         resolve();
       };
-      // Fallback timeout in case onopen doesn't fire
-      setTimeout(() => {
-        connected.value = true;
-        resolve();
-      }, timeoutMs);
+      // Fallback in case onopen doesn't fire — resolve but stay !connected
+      setTimeout(resolve, timeoutMs);
     });
   }
 
