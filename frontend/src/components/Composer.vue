@@ -23,8 +23,6 @@ const props = defineProps<{
   isGroup?: boolean;
   groupAgents?: { agent_id: string; name: string; color: string; icon: string }[];
   groupMembers?: { id: string; user_id: string | null; user_name?: string; agent_id: string | null }[];
-  contextTokens?: number;
-  contextSize?: number;
 }>();
 export interface SendOptions {
   profileId?: string;
@@ -124,28 +122,7 @@ function onResizeEnd() {
   window.removeEventListener("mouseup", onResizeEnd);
 }
 
-// ── Token bar ──
-const tokenPct = computed(() => {
-  if (!props.contextSize || props.contextSize === 0) return 0;
-  return Math.min(1, (props.contextTokens || 0) / props.contextSize);
-});
-const tokenBarColor = computed(() => {
-  if (tokenPct.value > 0.8) return "var(--danger)";
-  if (tokenPct.value > 0.6) return "#e6a817";
-  return "var(--ok)";
-});
-const tokenLabel = computed(() => {
-  const t = props.contextTokens || 0;
-  if (t === 0) return "";
-  if (t >= 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
-  if (t >= 1_000) return `${(t / 1_000).toFixed(0)}k`;
-  return `${t}`;
-});
-const tokenTooltip = computed(() => {
-  if (!props.contextTokens) return "";
-  const total = props.contextSize ? ` / ${props.contextSize >= 1000 ? (props.contextSize/1000).toFixed(0)+"k" : props.contextSize}` : "";
-  return `上下文：${tokenLabel.value}${total} tokens (${Math.round(tokenPct.value * 100)}%)`;
-});
+
 
 // @mention state
 const showMentionPicker = ref(false);
@@ -568,13 +545,6 @@ function isImageFile(f: File) {
           </div>
         </div>
         <span class="composer-spacer"></span>
-        <!-- Token context bar -->
-        <div v-if="tokenLabel" class="token-bar-wrap" :title="tokenTooltip">
-          <div class="token-bar-track">
-            <div class="token-bar-fill" :style="{ width: (tokenPct * 100) + '%', background: tokenBarColor }"></div>
-          </div>
-          <span class="token-bar-label" :style="{ color: tokenPct > 0.6 ? tokenBarColor : undefined }">{{ tokenLabel }}</span>
-        </div>
         <div style="position: relative">
           <button class="model-pick" :class="{ locked: profileLocked }" :title="profileLocked ? '助手已锁定，创建新会话可切换' : '切换助手'" @click="!profileLocked && (showProfile = !showProfile)">
             <span class="profile-dot" :style="{ background: pillColor }"></span>
@@ -696,29 +666,7 @@ function isImageFile(f: File) {
 }
 
 /* ── Token bar ── */
-.token-bar-wrap {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: default;
-}
-.token-bar-track {
-  width: 48px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--rule);
-  overflow: hidden;
-}
-.token-bar-fill {
-  height: 100%;
-  border-radius: 2px;
-  transition: width 400ms, background 400ms;
-}
-.token-bar-label {
-  font-size: 10.5px;
-  color: var(--ink-mute);
-  min-width: 26px;
-  text-align: right;
+
   font-variant-numeric: tabular-nums;
 }
 
