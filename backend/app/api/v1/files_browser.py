@@ -240,7 +240,12 @@ async def list_standalone_files(
                 is_folder=True,
             ))
         # Virtual subfolders (from file paths)
-        known_paths = {f.folder_path for f in db_folders}
+        # Build full path of each real folder for dedup: parent + name
+        known_paths: set[str] = set()
+        for f in db_folders:
+            fp = f.folder_path or "/"
+            full = fp.rstrip("/") + "/" + f.name if fp != "/" else "/" + f.name
+            known_paths.add(full)
         for sf in sorted(subfolders):
             if sf in known_paths:
                 continue
