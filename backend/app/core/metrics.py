@@ -37,18 +37,40 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class RequestIDMiddleware(BaseHTTPMiddleware):
-    """Assign/propagate a correlation id, bind it for logging, echo it back."""
+class RequestIDMiddleware:
+    """Assign/propagate a correlation id, bind it for logging, echo it back.
 
-    async def dispatch(self, request: Request, call_next):
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
-        token = request_id_var.set(rid)
+    Pure ASGI (not BaseHTTPMiddleware): BaseHTTPMiddleware buffers responses
+    through an anyio memory stream — bad for long-lived SSE — and runs in a
+    separate task, so a contextvar set there wouldn't reliably reach the route
+    handler's logging. Setting it here, before awaiting the inner app in the
+    same context, threads the id through every downstream log line.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        incoming = dict(scope.get("headers") or {})
+        raw = incoming.get(b"x-request-id", b"").decode() or uuid.uuid4().hex[:12]
+        rid_bytes = raw.encode()
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                headers.append((b"x-request-id", rid_bytes))
+                message["headers"] = headers
+            await send(message)
+
+        token = request_id_var.set(raw)
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         finally:
             request_id_var.reset(token)
-        response.headers["X-Request-ID"] = rid
-        return response
 
 
 def metrics_response() -> Response:
