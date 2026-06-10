@@ -168,7 +168,8 @@ const filteredAgents = computed(() => {
       _type: "human" as const,
     }));
   const all = [
-    { agent_id: "__all__", name: "所有人", color: "#888", icon: "users", _type: "all" as const },
+    { agent_id: "__all_agents__", name: "所有AI", color: "#888", icon: "users", _type: "all" as const },
+    { agent_id: "__all_humans__", name: "所有真人", color: "#4a9eff", icon: "user-check", _type: "all_humans" as const },
     ...agentItems,
     ...humanItems,
   ];
@@ -306,8 +307,10 @@ function selectMention(agent: { agent_id: string; name: string }) {
   mentionQuery.value = "";
 
   // Track the mention
-  if (agent.agent_id === "__all__") {
-    mentionMentions.value = ["__all__"];
+  if (agent.agent_id === "__all_agents__") {
+    mentionMentions.value = ["__all_agents__"];
+  } else if (agent.agent_id === "__all_humans__") {
+    mentionMentions.value = ["__all_humans__"];
   } else if (!mentionMentions.value.includes(agent.agent_id)) {
     mentionMentions.value.push(agent.agent_id);
   }
@@ -488,7 +491,8 @@ function isImageFile(f: File) {
         >
           <span class="mention-avatar" :style="{ background: a.color }"><Icon :name="a.icon" :size="11" /></span>
           <span class="mention-name">{{ a.name }}</span>
-          <span v-if="a.agent_id === '__all__'" class="mention-tag">圆桌</span>
+          <span v-if="a.agent_id === '__all_agents__'" class="mention-tag">圆桌</span>
+          <span v-else-if="a.agent_id === '__all_humans__'" class="mention-tag">全员</span>
           <span v-else-if="a._type === 'human'" class="mention-tag">成员</span>
         </button>
       </div>

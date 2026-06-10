@@ -871,10 +871,14 @@ async def resolve_mentions(
     if not mentions:
         return []
 
-    # @all → all agents in the group
-    if "__all__" in mentions:
+    # @all_agents → all AI agents in the group
+    if "__all_agents__" in mentions:
         members = await get_group_members(db, conversation_id)
         return [m.agent_id for m in members if m.agent_id]
+
+    # @all_humans → no AI agents to resolve, just a notification marker
+    if "__all_humans__" in mentions:
+        return []
 
     # Get group's agent members
     members = await get_group_members(db, conversation_id)
@@ -933,10 +937,13 @@ async def dispatch_group(
     """群聊消息路由：按 channel_mode + mentions 决定走人→人 / 人→机 / 圆桌。"""
     resolved = await resolve_mentions(db, convo.id, mentions)
 
+    # @all_humans → always just save the message (notification only, no AI trigger)
+    is_human_broadcast = "__all_humans__" in (mentions or [])
+
     # channel_mode gating
     mode = getattr(convo, "channel_mode", "mention") or "mention"
 
-    if mode == "off" or skip_agent:
+    if mode == "off" or skip_agent or is_human_broadcast:
         # off模式或前端显式跳过：只存消息，不触发Agent
         user_msg = Message(
             conversation_id=convo.id,
