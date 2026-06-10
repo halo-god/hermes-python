@@ -496,7 +496,7 @@ export const useChatStore = defineStore("chat", () => {
     // always appears above the agent's streaming bubble, even if SSE "start"
     // arrives before the API response.
     const optimisticUser = {
-      id: `tmp-${crypto.randomUUID()}`,
+      id: `tmp-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)}`,
       conversation_id: id,
       owner_id: null,
       role: "user" as const,
@@ -534,7 +534,7 @@ export const useChatStore = defineStore("chat", () => {
 
     // Optimistic user bubble
     messages.value.push({
-      id: `tmp-${crypto.randomUUID()}`,
+      id: `tmp-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)}`,
       conversation_id: id,
       owner_id: null,
       role: "user",
