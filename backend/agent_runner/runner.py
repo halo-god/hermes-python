@@ -1123,75 +1123,18 @@ class Runner:
             logger.exception("Failed to deliver clarify response sid=%s id=%s", sid[:8], clarify_id[:8])
             return False
 
-    def _classify_clarify_risk(self, question: str, options: list[str]) -> str:
-        """Keyword risk classification for clarify questions: low | medium | high.
-
-        Keyword lists live in settings (clarify_*_keywords) so deployments can
-        tune them. Misclassification is safe: medium/high only means "show the
-        modal", and the failure mode of auto-resolve is also "show the modal".
-        """
-        q_lower = question.lower()
-        opts_lower = [opt.lower() for opt in options]
-        combined = f"{q_lower} {' '.join(opts_lower)}"
-
-        for kw in settings.clarify_high_risk_keywords:
-            if kw.lower() in combined:
-                return "high"
-        for kw in settings.clarify_medium_risk_keywords:
-            if kw.lower() in combined:
-                return "medium"
-        for p in settings.clarify_low_risk_patterns:
-            p = p.lower()
-            if p in q_lower or any(p in opt for opt in opts_lower):
-                return "low"
-
-        # Heuristic: yes/no or OK/Cancel pairs are low-risk
-        if len(options) <= 2:
-            yes_no = {"是", "否", "yes", "no", "ok", "cancel", "跳过", "好的", "不用", "不"}
-            if all(any(w in opt.lower() for w in yes_no) for opt in options):
-                return "low"
-
-        return "medium"
-
     async def _handle_clarify_request(
         self, conversation_id: str, message_id: str, acc: dict, sid: str, data: dict
     ) -> None:
-        """Route one popped clarify request per the configured strategy.
+        """Present every clarify request to the user via the confirmation modal.
 
-        Strategies:
-          - disabled / auto_first : auto-resolve immediately (no UI)
-          - smart                 : risk-based (low=auto, medium/high=modal)
-          - interactive           : always pop confirmation modal
-        Auto-resolve failures fall back to the modal — never strand the agent.
+        Auto-resolve has been removed — all questions require human input.
         """
-        strategy = (settings.clarify_strategy or "smart").strip().lower()
         clarify_id = data.get("clarify_id") or uuid.uuid4().hex[:12]
         question = data.get("question") or "需要确认"
         options = data.get("options") or ["继续", "跳过"]
 
-        auto = strategy in ("disabled", "auto_first") or (
-            strategy == "smart" and self._classify_clarify_risk(question, options) == "low"
-        )
-        if auto:
-            choice = options[0] if options else "继续"
-            if await self._deliver_clarify_response(sid, clarify_id, choice):
-                logger.info(
-                    "Auto-resolved clarify sid=%s strategy=%s choice=%s",
-                    sid[:8], strategy, choice,
-                )
-                await self._record_clarify(message_id, acc, {
-                    "id": clarify_id, "question": question, "options": options,
-                    "status": "auto", "choice": choice,
-                    "ts": datetime.now(tz=timezone.utc).isoformat(),
-                })
-                await R.publish_event(conversation_id, {
-                    "type": "clarify_auto", "message_id": message_id,
-                    "question": question, "choice": choice,
-                })
-                return
-            logger.warning("Auto-resolve delivery failed, falling back to modal (sid=%s)", sid[:8])
-
-        # ── Interactive modal (interactive, smart medium/high, or auto fallback) ──
+        # ── Always show interactive modal ──
         await self._record_clarify(message_id, acc, {
             "id": clarify_id, "question": question, "options": options,
             "status": "pending", "ts": datetime.now(tz=timezone.utc).isoformat(),
