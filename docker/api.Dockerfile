@@ -1,4 +1,3 @@
-
 FROM docker.m.daocloud.io/library/python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -26,6 +25,12 @@ RUN pip install --upgrade pip \
 COPY backend/ ./
 
 RUN chmod +x scripts/start.sh
+
+# Create non-root user for security
+RUN groupadd -r hermes && useradd -r -g hermes -d /app -s /sbin/nologin hermes \
+    && chown -R hermes:hermes /app
+
+USER hermes
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \

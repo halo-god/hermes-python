@@ -1,10 +1,28 @@
 """Application configuration, driven by environment variables."""
 from __future__ import annotations
 
+import os
+import secrets
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _default_secret_key() -> str:
+    """Generate a secure random secret for development. In production, always set SECRET_KEY env var."""
+    env_val = os.environ.get("SECRET_KEY")
+    if env_val:
+        return env_val
+    return f"dev-{secrets.token_hex(24)}"
+
+
+def _default_admin_password() -> str:
+    """Generate a random admin password for development. In production, always set FIRST_ADMIN_PASSWORD."""
+    env_val = os.environ.get("FIRST_ADMIN_PASSWORD")
+    if env_val:
+        return env_val
+    return f"Admin-{secrets.token_hex(8)}"
 
 
 class Settings(BaseSettings):
@@ -19,7 +37,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     # ── Security / JWT ──
-    secret_key: str = Field(default="change-me-in-production-please-32+chars")
+    secret_key: str = Field(default_factory=_default_secret_key)
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 7
@@ -39,7 +57,7 @@ class Settings(BaseSettings):
 
     # ── Bootstrap super admin (seeded on first run) ──
     first_admin_email: str = "admin@hermes.io"
-    first_admin_password: str = "Hermes@2026"
+    first_admin_password: str = Field(default_factory=_default_admin_password)
     first_admin_name: str = "林知微"
 
     # ── Agent Runner / ACP ──
@@ -121,11 +139,11 @@ class Settings(BaseSettings):
         when this is non-empty in production so insecure defaults never ship.
         """
         problems: list[str] = []
-        if self.secret_key.startswith("change-me") or len(self.secret_key) < 32:
+        if self.secret_key.startswith("dev-") or len(self.secret_key) < 32:
             problems.append(
                 "SECRET_KEY is the insecure default (or <32 chars) — set a strong random value"
             )
-        if self.first_admin_password == "Hermes@2026":
+        if self.first_admin_password.startswith("Admin-") or len(self.first_admin_password) < 12:
             problems.append(
                 "FIRST_ADMIN_PASSWORD is the well-known default — override it"
             )

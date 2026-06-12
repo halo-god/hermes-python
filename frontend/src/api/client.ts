@@ -9,20 +9,49 @@ const API_BASE = import.meta.env.VITE_API_BASE || "/api/v1";
 export const ACCESS_KEY = "hermes.access";
 export const REFRESH_KEY = "hermes.refresh";
 
+/**
+ * Token store with XSS protection:
+ * - Access token: stored in memory only (JS variables are not accessible to XSS)
+ * - Refresh token: stored in localStorage (needed for session persistence across page reloads)
+ *
+ * On page reload, call tokenStore.restore() to get a new access token using the refresh token.
+ */
 export const tokenStore = {
+  _access: null as string | null,
+
   get access() {
-    return localStorage.getItem(ACCESS_KEY);
+    return this._access;
   },
   get refresh() {
     return localStorage.getItem(REFRESH_KEY);
   },
   set(access: string, refresh: string) {
-    localStorage.setItem(ACCESS_KEY, access);
+    this._access = access;
     localStorage.setItem(REFRESH_KEY, refresh);
   },
   clear() {
-    localStorage.removeItem(ACCESS_KEY);
+    this._access = null;
     localStorage.removeItem(REFRESH_KEY);
+  },
+
+  /**
+   * Restore access token from refresh token on page reload.
+   * Returns true if restoration succeeded.
+   */
+  async restore(): Promise<boolean> {
+    const refresh = localStorage.getItem(REFRESH_KEY);
+    if (!refresh) return false;
+    try {
+      const { data } = await axios.post(`${API_BASE}/auth/refresh`, {
+        refresh_token: refresh,
+      });
+      this._access = data.access_token;
+      localStorage.setItem(REFRESH_KEY, data.refresh_token);
+      return true;
+    } catch {
+      this.clear();
+      return false;
+    }
   },
 };
 

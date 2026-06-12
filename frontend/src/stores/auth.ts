@@ -22,9 +22,18 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** Restore session on app boot (page refresh). */
   async function bootstrap() {
-    if (!tokenStore.access && !tokenStore.refresh) {
-      ready.value = true;
-      return;
+    // Access token is in memory only — after page reload it's null.
+    // Try to restore from refresh token first.
+    if (!tokenStore.access) {
+      if (!tokenStore.refresh) {
+        ready.value = true;
+        return;
+      }
+      const restored = await tokenStore.restore();
+      if (!restored) {
+        ready.value = true;
+        return;
+      }
     }
     try {
       user.value = await authApi.me();
