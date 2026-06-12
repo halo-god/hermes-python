@@ -59,6 +59,12 @@ async def handle_roundtable(task: dict, agents: dict) -> None:
 
         async def on_fs(path: str, content: str) -> None:
             f = await storage.save_file(uuid.UUID(conversation_id), path, content, aid, uuid.UUID(message_id))
+            # Also write to disk so the agent can read its own output later.
+            from app.core.files import confine_to_dir, safe_relative_path
+            disk_path = confine_to_dir(cwd, safe_relative_path(path))
+            os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+            with open(disk_path, "w", encoding="utf-8") as fh:
+                fh.write(content)
             await R.publish_event(conversation_id, {
                 "type": "file", "message_id": message_id, "file_id": str(f.id),
                 "name": f.name, "kind": f.kind, "version": f.current_version,

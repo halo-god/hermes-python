@@ -37,6 +37,13 @@ from agent_runner.session_pool import SessionPool
 
 logger = logging.getLogger("hermes.runner")
 
+
+def _write_text(path: str, content: str) -> None:
+    """Synchronous file write for use with asyncio.to_thread."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+
+
 # ── Stability constants ──
 LOCK_KEY = "hermes:runner:lock"
 LOCK_TTL = 30          # seconds; must be > heartbeat interval
@@ -511,6 +518,11 @@ class Runner:
                 uuid.UUID(conversation_id), path, content, agent_id,
                 uuid.UUID(acc["current_msg_id"]),
             )
+            # Also write to disk so the agent can read its own output later.
+            from app.core.files import confine_to_dir, safe_relative_path
+            disk_path = confine_to_dir(cwd, safe_relative_path(path))
+            os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+            await asyncio.to_thread(_write_text, disk_path, content)
             diff: str | None = None
             if old_content is not None:
                 diff_lines = list(difflib.unified_diff(

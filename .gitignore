@@ -13,3 +13,4 @@ build/
 *.egg-info/
 .minio_data/
 __MACOSX/
+workspaces/

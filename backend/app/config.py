@@ -5,8 +5,10 @@ import os
 import secrets
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _default_secret_key() -> str:
@@ -29,6 +31,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def _resolve_relative_paths(self) -> "Settings":
+        if self.workspace_root:
+            self.workspace_root = os.path.expanduser(self.workspace_root)
+            if not os.path.isabs(self.workspace_root):
+                self.workspace_root = os.path.join(_BACKEND_DIR, self.workspace_root)
+        return self
 
     # ── App ──
     app_name: str = "Hermes 信使"
@@ -71,7 +81,7 @@ class Settings(BaseSettings):
     # Fall back to the bundled mock ACP agent when the real CLI isn't on PATH.
     acp_allow_mock_fallback: bool = True
     # Per-conversation working dir where agents drop produced files.
-    workspace_root: str = Field(default="/tmp/hermes-workspaces")
+    workspace_root: str = Field(default="~/hermes-data/workspaces")
     # Redis Stream (prompt queue) + consumer group.
     acp_stream: str = "acp:prompt"
     acp_group: str = "runner"
@@ -88,6 +98,8 @@ class Settings(BaseSettings):
     # How long the runner waits for the user to answer a clarify modal.
     # Must stay well under acp_prompt_timeout so one clarify round can't kill the prompt.
     clarify_timeout_seconds: int = 240
+    # Set to "disabled" to turn off the clarify preamble on first turns.
+    clarify_strategy: str = Field(default="")
     # session/prompt deadline for the ACP subprocess.
     acp_prompt_timeout: int = 900
 
