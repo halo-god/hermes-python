@@ -114,7 +114,6 @@ async def providers(db: AsyncSession = Depends(get_db)) -> list[ProviderInfo]:
 @router.get("/wecom/authorize")
 async def wecom_authorize(db: AsyncSession = Depends(get_db)):
     """Return the WeCom OAuth authorize URL for frontend redirect."""
-    from app.services import identity_service
     from app.auth_providers.wecom import build_authorize_url
 
     provider = await db.get(IdentityProvider, "wecom")

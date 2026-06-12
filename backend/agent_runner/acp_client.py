@@ -188,7 +188,7 @@ class ACPClient:
 
     async def load_session(self, session_id: str, cwd: str, mcp_servers: list | None = None) -> str:
         """Load an existing session (replays history via session/update)."""
-        res = await self._request(
+        await self._request(
             "session/load",
             {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=SESSION_TIMEOUT,
@@ -198,7 +198,7 @@ class ACPClient:
 
     async def resume_session(self, session_id: str, cwd: str, mcp_servers: list | None = None) -> str:
         """Resume an existing session without replaying history."""
-        res = await self._request(
+        await self._request(
             "session/resume",
             {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers or []},
             timeout=SESSION_TIMEOUT,

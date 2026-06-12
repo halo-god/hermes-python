@@ -100,7 +100,6 @@ async def authenticate(config: dict, code: str) -> IdentityInfo:
         if not email:
             # WeCom may return empty email; generate placeholder
             email = f"{userid}@wecom.infiled.com"
-        mobile = data.get("mobile", "")
         department_ids = data.get("department", [])  # list of int dept IDs
 
         # Step 4: Resolve department name from first department ID

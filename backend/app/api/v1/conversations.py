@@ -42,6 +42,8 @@ from app.schemas.conversation import (
     SendMessageRequest,
     SendMessageResponse,
     SetAgentsRequest,
+    SetSessionModeRequest,
+    SetSessionModelRequest,
     WorkspaceFileDetail,
     WorkspaceFileOut,
     WorkspaceFileVersionOut,
@@ -702,8 +704,6 @@ async def extract_items(
 
 # ── ACP session control endpoints ──
 
-from app.schemas.conversation import SetSessionModeRequest, SetSessionModelRequest
-
 
 @router.post("/{conversation_id}/session/fork", response_model=ConversationDetail)
 async def fork_session(
@@ -712,8 +712,7 @@ async def fork_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Fork the ACP session: create a new conversation with copied agent context."""
-    from app.db.models.conversation import Conversation, Message
-    from sqlalchemy import select
+    from app.db.models.conversation import Conversation
 
     convo = await _require_convo(db, conversation_id, user)
     if not convo.acp_session_id:

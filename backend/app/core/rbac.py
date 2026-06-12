@@ -6,7 +6,6 @@ in services/governance_service.py during P3.
 """
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
 
 # Platform roles, most → least privileged.
 ROLE_ORDER: dict[str, int] = {

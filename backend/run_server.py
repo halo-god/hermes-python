@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Start uvicorn with log to file (clean, no duplicates)."""
 import logging
+import uvicorn
 
 LOG_FILE = "/tmp/hermes-api.log"
 
@@ -10,8 +11,6 @@ app_logger.setLevel(logging.INFO)
 fh = logging.FileHandler(LOG_FILE, mode="a")
 fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(name)s - %(message)s"))
 app_logger.addHandler(fh)
-
-import uvicorn
 
 # File handler added to:
 # - uvicorn (catches uvicorn.error via propagation) 

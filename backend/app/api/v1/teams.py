@@ -498,7 +498,8 @@ async def upload_knowledge(
             content = base64.b64encode(raw).decode("ascii")
     elif ext in ("xlsx", "xls"):
         try:
-            import io, pandas as pd
+            import io
+            import pandas as pd
             dfs = pd.read_excel(io.BytesIO(raw), sheet_name=None)
             parts = []
             for sheet_name, df in dfs.items():

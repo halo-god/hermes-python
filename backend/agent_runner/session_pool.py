@@ -11,7 +11,7 @@ import logging
 import time
 
 from app.config import settings
-from agent_runner.acp_client import ACPClient, ACPTimeout, OnFsWrite, OnUpdate, profile_env
+from agent_runner.acp_client import ACPClient, OnFsWrite, OnUpdate, profile_env
 
 logger = logging.getLogger("hermes.pool")
 

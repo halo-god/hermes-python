@@ -24,7 +24,6 @@ import uuid
 from datetime import datetime, timezone
 
 from redis.exceptions import ResponseError
-from sqlalchemy import select
 
 from app.config import settings
 from app.core.logging import configure_logging
@@ -32,9 +31,8 @@ from app.core import redis as R
 from app.db.base import async_session_maker
 from app.db.models.agent import Agent
 from app.db.models.conversation import Conversation, Message
-from app.db.models.user import User
 from agent_runner import discovery, storage
-from agent_runner.acp_client import ACPClient, ACPTimeout, profile_env
+from agent_runner.acp_client import ACPTimeout
 from agent_runner.session_pool import SessionPool
 
 logger = logging.getLogger("hermes.runner")
@@ -663,7 +661,6 @@ class Runner:
         self, conversation_id: str, message_id: str, agent_id: str, text: str
     ) -> None:
         """Parse AI response text for file artifacts and save them to the workspace."""
-        import re
 
         cid = uuid.UUID(conversation_id)
         saved_names: set[str] = set()

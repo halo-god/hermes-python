@@ -126,7 +126,7 @@ class LDAPProvider:
             ssl_label = "LDAPS" if config.get("use_ssl") else "LDAP"
             msg = f"已成功连接到 {ssl_label}://{host}:{port}"
             if bind_dn:
-                msg += f"，服务账号验证通过"
+                msg += "，服务账号验证通过"
             return {"ok": True, "message": msg}
 
         except Exception as exc:  # noqa: BLE001

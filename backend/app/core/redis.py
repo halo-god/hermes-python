@@ -43,7 +43,6 @@ async def is_blacklisted(jti: str) -> bool:
 # ── ACP prompt queue (Redis Stream) + live event stream (per conversation) ──
 import json as _json  # noqa: E402
 
-from app.config import settings  # noqa: E402
 
 # Live events are stored in a capped per-conversation Redis Stream (not Pub/Sub):
 # Streams replay, so a subscriber that connects after events were published —

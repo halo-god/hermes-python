@@ -6,7 +6,6 @@ Requires: docker compose up -d (postgres on port 5432)
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from typing import AsyncGenerator

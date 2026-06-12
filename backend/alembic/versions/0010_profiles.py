@@ -6,7 +6,6 @@ Create Date: 2026-06-02
 """
 from __future__ import annotations
 
-import uuid
 
 import sqlalchemy as sa
 from alembic import op

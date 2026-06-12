@@ -334,8 +334,8 @@ async def scan_profiles(
 
     if hermes_path is None:
         errors.append(
-            f"未找到 hermes 可执行文件（已搜索 PATH 及常见安装目录）。"
-            f"如已安装，请设置环境变量 HERMES_BIN=/your/path/to/hermes 后重启服务。"
+            "未找到 hermes 可执行文件（已搜索 PATH 及常见安装目录）。"
+            "如已安装，请设置环境变量 HERMES_BIN=/your/path/to/hermes 后重启服务。"
         )
 
     # --- load existing handles ---

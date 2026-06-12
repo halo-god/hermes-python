@@ -5,11 +5,8 @@ import asyncio
 import os
 import signal
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.db.models.user import User
-from app.deps import get_db
 
 router = APIRouter()
 
