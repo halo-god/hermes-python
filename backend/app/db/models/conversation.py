@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,6 +14,9 @@ from app.db.models.mixins import Timestamps, UUIDPrimaryKey
 
 class Conversation(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conv_owner_updated", "owner_id", "updated_at", postgresql_using="btree"),
+    )
 
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
     icon: Mapped[str | None] = mapped_column(String(40), default="chat")
