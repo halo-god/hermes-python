@@ -1,4 +1,4 @@
-# PR 时自动运行：lint + type-check + 测试
+# PR 时自动运行：lint + type-check + 测试 + 安全扫描
 name: CI
 
 on:
@@ -8,6 +8,25 @@ on:
     branches: [main]
 
 jobs:
+  # ── 安全扫描 ──
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit Python dependencies
+        working-directory: backend
+        run: |
+          pip install -e .
+          pip-audit --require-hashes false --progress-spinner off
+
   # ── 后端检查 ──
   backend:
     runs-on: ubuntu-latest
@@ -73,6 +92,10 @@ jobs:
       - name: Install deps
         working-directory: frontend
         run: npm ci
+
+      - name: Audit npm dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high
 
       - name: Type check
         working-directory: frontend
